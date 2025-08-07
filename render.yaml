@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: tradingview-kraken-bot
+    env: python
+    buildCommand: ""
+    startCommand: "gunicorn main:app"
+    autoDeploy: true
+    envVars:
+      - key: KRAKEN_API_KEY
+        sync: false
+      - key: KRAKEN_API_SECRET
+        sync: false
