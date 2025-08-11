@@ -1,85 +1,53 @@
 import os
+import json
 from flask import Flask, request, jsonify
 import krakenex
 
-app = Flask(__name__)
+app = Flask(_name_)
 
-# --- Config via variables d'environnement Render ---
+# ========= Configuration via variables d'environnement =========
 API_KEY = os.getenv("KRAKEN_API_KEY", "")
 API_SECRET = os.getenv("KRAKEN_API_SECRET", "")
-PAPER_MODE = os.getenv("PAPER_MODE", "1") == "1"  # 1 = paper, 0 = réel
+PAPER_MODE = os.getenv("PAPER_MODE", "1") == "1"   # 1 = test (papier), 0 = réel
 
-BASE = os.getenv("BASE_SYMBOL", "BTC")
-QUOTE = os.getenv("QUOTE_SYMBOL", "EUR")
+BASE = os.getenv("BASE_SYMBOL", "BTC").upper()     # ex: BTC
+QUOTE = os.getenv("QUOTE_SYMBOL", "EUR").upper()   # ex: EUR
 RISK_EUR_PER_TRADE = float(os.getenv("RISK_EUR_PER_TRADE", "25"))
 
-# Client Kraken (même en paper on l'instancie, pas grave)
+# ========= Client Kraken =========
 api = krakenex.API(API_KEY, API_SECRET)
 
-# Mapping simple des paires Kraken (tu pourras en ajouter au besoin)
-def kraken_pair_code(base: str, quote: str) -> str:
-    mapping = {
-        ("BTC", "EUR"): "XXBTZEUR",
-        ("ETH", "EUR"): "XETHZEUR",
-        ("BTC", "USD"): "XXBTZUSD",
-        ("ETH", "USD"): "XETHZUSD",
-    }
-    return mapping.get((base.upper(), quote.upper()), f"{base.upper()}{quote.upper()}")
+# Résolution et cache du code de paire Kraken (ex: "XXBTZEUR")
+_PAIR_CACHE = None
 
-PAIR = kraken_pair_code(BASE, QUOTE)
 
-@app.get("/")
-def health():
-    return "ok", 200
+def resolve_kraken_pair(base: str, quote: str) -> str:
+    """
+    Récupère le code de paire Kraken en interrogeant l'API publique AssetPairs.
+    On essaie d'abord des correspondances sur altname (ex: BTCEUR) et wsname (ex: BTC/EUR).
+    Le résultat est mis en cache pour éviter de recharger à chaque webhook.
+    """
+    global _PAIR_CACHE
+    if _PAIR_CACHE:
+        return _PAIR_CACHE
 
-@app.post("/webhook")
-def webhook():
-    data = request.get_json(force=True, silent=True) or {}
-    print(">>> Webhook reçu:", data)
-
-    signal = (data.get("signal") or "").upper()
-    price_raw = data.get("price")
-
-    # Prix peut arriver avec virgule (locale FR) -> on normalise
-    price = None
-    if isinstance(price_raw, (int, float)):
-        price = float(price_raw)
-    elif isinstance(price_raw, str):
-        price = float(price_raw.replace(",", "."))
-    # Sinon, on laissera Kraken remplir au prix marché.
-
-    # On ne traite que les signaux attendus
-    if signal not in {"BUY", "SELL", "BUY_CONFIRM", "SELL_CONFIRM"}:
-        return jsonify({"status": "ignored", "reason": "unknown signal"}), 200
-
-    # Taille de position approximative : RISK_EUR_PER_TRADE / price
-    # (si pas de price, volume par défaut très petit)
-    if price and price > 0:
-        volume = round(RISK_EUR_PER_TRADE / price, 6)
-    else:
-        volume = 0.00025  # micro-volume par défaut
-
-    side = "buy" if signal.startswith("BUY") else "sell"
-
-    if PAPER_MODE:
-        print(f"[PAPER] {side.upper()} {PAIR} volume={volume} price={price}")
-        return jsonify({"status": "paper_ok", "pair": PAIR, "side": side, "volume": volume}), 200
-
-    # En réel : ordre au marché
     try:
-        payload = {
-            "pair": PAIR,
-            "type": side,
-            "ordertype": "market",
-            "volume": str(volume),
-        }
-        resp = api.query_private("AddOrder", payload)
-        print("Kraken AddOrder resp:", resp)
-        return jsonify({"status": "ok", "kraken": resp}), 200
-    except Exception as e:
-        print("Kraken error:", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        resp = api.query_public("AssetPairs")
+        if "result" not in resp:
+            raise RuntimeError(f"AssetPairs error: {resp}")
 
-if __name__ == "__main__":
-    # Render fournit PORT en env ; sinon 5000 en local
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+        wanted_alt = f"{base}{quote}"          # ex: BTCEUR
+        wanted_ws = f"{base}/{quote}"          # ex: BTC/EUR
+
+        for pair_code, meta in resp["result"].items():
+            alt = str(meta.get("altname", "")).upper()
+            ws = str(meta.get("wsname", "")).upper()
+            if alt == wanted_alt or ws == wanted_ws:
+                _PAIR_CACHE = pair_code
+                print(f"[PAIR] Resolved {base}-{quote} -> {pair_code} (alt={alt}, ws={ws})")
+                return pair_code
+
+        # Fallback minimal (peu probable d'être nécessaire)
+        raise RuntimeError(f"No Kraken pair found for {wanted_alt}/{wanted_ws}")
+
+    except Exception as e
