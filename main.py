@@ -125,4 +125,4 @@ if __name__ == "__main__":
         # Fallback minimal (peu probable d'être nécessaire)
         raise RuntimeError(f"No Kraken pair found for {wanted_alt}/{wanted_ws}")
 
-    except Exception as e
+except Exception as e:
