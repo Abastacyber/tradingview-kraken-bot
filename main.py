@@ -1,61 +1,71 @@
-import os
-import json
-from flask import Flask, request
-import krakenex
-
-# ====== Config via variables d'environnement Render ======
-BASE_SYMBOL = os.getenv("BASE_SYMBOL", "BTC")
-QUOTE_SYMBOL = os.getenv("QUOTE_SYMBOL", "EUR")
-RISK_EUR_PER_TRADE = float(os.getenv("RISK_EUR_PER_TRADE", "25"))
-PAPER_MODE = os.getenv("PAPER_MODE", "1") == "1"
-
-KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
-KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET")
-
-# ====== Kraken client ======
-kraken = krakenex.API()
-kraken.key = KRAKEN_API_KEY
-kraken.secret = KRAKEN_API_SECRET
+import os, json, logging, time
+from flask import Flask, request, jsonify
+import requests
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-@app.get("/")
-def home():
-    return "Bot TradingView-Kraken actif"
+# === ENV ===
+API_KEY = os.getenv('KRAKEN_API_KEY', '')
+API_SECRET = os.getenv('KRAKEN_API_SECRET', '')
+BASE = os.getenv('BASE_SYMBOL', 'BTC').upper()
+QUOTE = os.getenv('QUOTE_SYMBOL', 'EUR').upper()
+PAPER = os.getenv('PAPER_MODE', '1') == '1'
+RISK_EUR = float(os.getenv('RISK_EUR_PER_TRADE', '25'))
+
+# Map TV -> Kraken (principaux)
+MAP = {'BTC':'XBT', 'ETH':'XETH', 'LTC':'XLTC'}
+
+def to_kraken_pair(tv_symbol: str) -> str:
+    # "BTC/EUR" -> "XBTEUR"
+    base, quote = [s.strip().upper() for s in tv_symbol.split('/')]
+    return f"{MAP.get(base, base)}{quote}"
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
 
 @app.post("/webhook")
 def webhook():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        signal = (data.get("signal") or "").upper()
-        if signal not in ("BUY", "SELL"):
-            return {"error": "invalid signal"}, 400
+    t0 = time.time()
+    data = request.get_json(force=True, silent=False)
+    app.logger.info(f"Webhook payload: {json.dumps(data, ensure_ascii=False)}")
 
-        pair = f"{BASE_SYMBOL}{QUOTE_SYMBOL}"
+    signal = (data.get("signal") or "").upper().strip()
+    symbol = (data.get("symbol") or f"{BASE}/{QUOTE}").upper().strip()
+    timeframe = (data.get("timeframe") or "").strip()
 
-        if PAPER_MODE:
-            print(f"[PAPER] {signal} {pair}")
-            return {"status": "ok", "mode": "paper", "signal": signal, "pair": pair}, 200
+    if signal not in {"BUY","SELL"}:
+        return jsonify({"error": "invalid signal"}), 400
 
-        # Récupère le prix marché et calcule un petit volume
-        t = kraken.query_public("Ticker", {"pair": pair})
-        key = next(iter(t["result"]))
-        price = float(t["result"][key]["c"][0])
-        volume = max(round(RISK_EUR_PER_TRADE / price, 6), 0.000025)
+    pair = to_kraken_pair(symbol)
+    price = fetch_price(pair)
+    qty = calc_qty(price)
 
-        order = kraken.query_private("AddOrder", {
-            "pair": pair,
-            "type": "buy" if signal == "BUY" else "sell",
-            "ordertype": "market",
-            "volume": str(volume),
-        })
-        print(f"[LIVE] {signal} {pair} -> {order}")
-        return {"status": "ok", "order": order}, 200
+    if PAPER:
+        app.logger.info(f"PAPER {signal} {pair} qty={qty} price≈{price} tf={timeframe} dt={time.time()-t0:.3f}s")
+        return jsonify({"paper": True, "signal": signal, "pair": pair, "qty": qty, "price": price}), 200
 
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        return {"error": str(e)}, 500
+    # TODO: implémenter AddOrder privé Kraken ici (signature HMAC-SHA512)
+    app.logger.info(f"REAL (TODO) {signal} {pair} qty={qty} price≈{price}")
+    return jsonify({"paper": False, "todo": "place real order"}), 200
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+def fetch_price(pair: str) -> float:
+    # Kraken public ticker
+    url = f"https://api.kraken.com/0/public/Ticker?pair={pair}"
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    res = r.json()
+    if res.get("error"):
+        raise RuntimeError(res["error"])
+    data = res["result"]
+    k = next(iter(data.keys()))
+    return float(data[k]["c"][0])
+
+def calc_qty(price: float) -> float:
+    raw = RISK_EUR / max(price, 1e-9)
+    return float(f"{raw:.6f}")  # arrondi simple; adapter au step size Kraken
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
