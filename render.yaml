@@ -1,6 +1,6 @@
 services:
   - type: web
     name: tradingview-kraken-bot
-    runtime: python
+    env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
