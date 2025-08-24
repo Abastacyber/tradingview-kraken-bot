@@ -1,10 +1,16 @@
 # gunicorn.conf.py
+# =================
+# Logs concis + utiles pour Render
 
-# on garde l'access log (utile sur Render) + errors sur stdout
-accesslog = '-'
-errorlog = '-'
-loglevel = 'info'  # cohérent avec LOG_LEVEL=INFO
+# On garde les access/error logs sur stdout/stderr (Render les capte)
+accesslog = "-"
+errorlog  = "-"
+loglevel  = "info"
 
-# Format court : [date] VERBE PATH?query STATUT BYTES DUREE
-access_log_format = "%(t)s %(m)s %(U)s%(q)s %(s)s %(B)s %(L)s"
-# ex: [24/Aug/2025:10:30:04 +0000] POST /webhook 200 123 0.087
+# Format court : [date] statut PATH durée_ms UA
+#   %(t)s  -> date
+#   %(s)s  -> HTTP status
+#   %(U)s  -> chemin (sans query)
+#   %(M)s  -> durée en ms
+#   %(a)s  -> user-agent
+access_log_format = "%(t)s | %(s)s | %(U)s | %(M)sms | UA:%(a)s”
