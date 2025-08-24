@@ -1,259 +1,172 @@
-import os
-import json
-import math
-import time
-from datetime import datetime, timezone
-
+# app.py — Webhook TradingView -> Kraken (avec auto-réduction et auto-topup)
+import os, math, json, logging, time
 from flask import Flask, request, jsonify
-import requests
 import krakenex
 
-# =========================
-#  Config via ENV
-# =========================
+# ------------ LOGGING ------------
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+log = logging.getLogger("tv-kraken")
+
+# ------------ CONFIG ENV ------------
 KRAKEN_API_KEY    = os.getenv("KRAKEN_API_KEY", "")
 KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET", "")
 
-BASE  = os.getenv("BASE", "BTC").upper()     # ex: BTC
-QUOTE = os.getenv("QUOTE", "EUR").upper()    # ex: EUR
-PAIR  = f"{BASE}{QUOTE}"                     # ex: BTCEUR
+# Pair & assets (Kraken: BTC s'écrit XBT)
+PAIR  = os.getenv("PAIR", "XBTEUR")   # marché visé
+BASE  = os.getenv("BASE", "XXBT")     # code solde BTC chez Kraken
+QUOTE = os.getenv("QUOTE", "ZEUR")    # code solde EUR chez Kraken
 
-SIZE_MODE = os.getenv("SIZE_MODE", "fixed_eur").lower()  # "fixed_eur" uniquement ici
-FIXED_EUR_PER_TRADE = float(os.getenv("FIXED_EUR_PER_TRADE", "35"))  # € par trade
+# Sizing & sécurité
+FIXED_EUR_PER_TRADE = float(os.getenv("FIXED_EUR_PER_TRADE", "50"))  # ticket cible en €
+FEE_BUFFER_PCT      = float(os.getenv("FEE_BUFFER_PCT", "0.002"))    # 0.2% marge frais
+MAX_OPEN_POS        = int(os.getenv("MAX_OPEN_POS", "1"))            # pour extension si besoin
 
-FEE_BUFFER_PCT   = float(os.getenv("FEE_BUFFER_PCT", "0.002"))  # 0.002 = 0.2%
-ALERT_PRICE_TOL  = float(os.getenv("ALERT_PRICE_TOL", "0.5"))   # tolérance % vs prix alert
-MAX_OPEN_POS     = int(os.getenv("MAX_OPEN_POS", "1"))          # non utilisé ici (spot simple)
+# Auto-top-up (combler BTC manquant avant un SELL)
+AUTO_TOPUP      = os.getenv("AUTO_TOPUP", "true").lower() == "true"
+TOPUP_EUR_LIMIT = float(os.getenv("TOPUP_EUR_LIMIT", "30"))          # € max pour combler
+BTC_RESERVE     = float(os.getenv("BTC_RESERVE", "0.00005"))         # petit coussin BTC à garder
 
-# Réessais réseau
-HTTP_RETRIES     = int(os.getenv("HTTP_RETRIES", "3"))
-HTTP_BACKOFF_S   = float(os.getenv("HTTP_BACKOFF_S", "0.7"))
+# Cooldown entre alertes (évite spam)
+COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "900"))                 # 15 min
+last_alert_ts = 0
 
-# Réserve “poussière” pour éviter le plein solde
-DUST_RESERVE_BASE = float(os.getenv("DUST_RESERVE_BASE", "0.00001"))  # BTC à laisser de côté
-DUST_RESERVE_QUOTE = float(os.getenv("DUST_RESERVE_QUOTE", "1.0"))    # EUR à laisser de côté
-
-# =========================
-#  Kraken client
-# =========================
+# ------------ KRAKEN API ------------
 api = krakenex.API(key=KRAKEN_API_KEY, secret=KRAKEN_API_SECRET)
 
+def get_balances():
+    """Retourne (EUR, BTC) disponibles sur le compte."""
+    r = api.query_private("Balance")
+    if r.get("error"):
+        log.error(f"Kraken Balance ERROR: {r['error']}")
+        return 0.0, 0.0
+    b = r["result"]
+    eur = float(b.get(QUOTE, 0))
+    btc = float(b.get(BASE, 0))
+    return eur, btc
+
+def get_pair_info():
+    """Récupère lot_decimals (pas de volume) et ordermin de la paire."""
+    r = api.query_public("AssetPairs", {"pair": PAIR})
+    if r.get("error"):
+        log.error(f"Kraken AssetPairs ERROR: {r['error']}")
+        # valeurs de secours raisonnables pour XBTEUR
+        return 8, 0.00002
+    p = next(iter(r["result"].values()))
+    lot_dec = p.get("lot_decimals", 8)
+    ordermin = float(p.get("ordermin", "0.00002"))
+    return lot_dec, ordermin
+
+LOT_DEC, ORDERMIN = get_pair_info()
+
+def round_qty(q):
+    """Arrondi vers le bas au pas d'incrément imposé par la paire."""
+    step = 10 ** (-LOT_DEC)
+    return max(0.0, math.floor(q / step) * step)
+
+def open_buy(price: float):
+    """Ouvre un BUY en fonction du cash dispo, en respectant ordermin et les frais."""
+    eur, btc = get_balances()
+    spendable = min(FIXED_EUR_PER_TRADE, eur * (1.0 - FEE_BUFFER_PCT))
+    if spendable < 5:
+        log.info(f"BUY skipped: EUR insuffisants ({eur:.2f}€)")
+        return
+
+    qty = round_qty(spendable / price)
+    if qty < ORDERMIN:
+        log.info(f"BUY réduit mais < ordermin ({qty} < {ORDERMIN}) -> skipped")
+        return
+
+    log.info(f"==> ORDER BUY {qty:.8f} {PAIR} (~{spendable:.2f}€) @ ~{price}")
+    r = api.query_private("AddOrder", {
+        "pair": PAIR, "type": "buy", "ordertype": "market", "volume": f"{qty:.8f}"
+    })
+    if r.get("error"):
+        log.error(f"Kraken ERROR (BUY): {r['error']}")
+
+def open_sell(price: float):
+    """Ouvre un SELL; si BTC insuffisants, top-up auto dans la limite TOPUP_EUR_LIMIT."""
+    eur, btc = get_balances()
+    sellable = max(0.0, btc - BTC_RESERVE)
+
+    # Si on n'atteint pas le minimum, tenter de combler
+    if sellable < ORDERMIN:
+        missing = (ORDERMIN + BTC_RESERVE) - btc
+        if AUTO_TOPUP and missing > 0:
+            need_eur = missing * price / (1.0 - FEE_BUFFER_PCT)
+            buy_eur = min(need_eur, TOPUP_EUR_LIMIT, eur * (1.0 - FEE_BUFFER_PCT))
+            if buy_eur >= 5:
+                qty_buy = round_qty(buy_eur / price)
+                if qty_buy >= ORDERMIN:
+                    log.info(f"AUTO-TOPUP: achat {qty_buy:.8f} BTC (~{buy_eur:.2f}€) pour combler avant SELL")
+                    r = api.query_private("AddOrder", {
+                        "pair": PAIR, "type": "buy", "ordertype": "market", "volume": f"{qty_buy:.8f}"
+                    })
+                    if r.get("error"):
+                        log.error(f"Kraken ERROR (TOPUP): {r['error']}")
+                    # refresh balances
+                    eur, btc = get_balances()
+                    sellable = max(0.0, btc - BTC_RESERVE)
+
+    qty = round_qty(sellable)
+    if qty < ORDERMIN:
+        log.info(f"SELL skipped: BTC insuffisants (vendable={qty} < ordermin={ORDERMIN})")
+        return
+
+    log.info(f"==> ORDER SELL {qty:.8f} {PAIR} @ ~{price}")
+    r = api.query_private("AddOrder", {
+        "pair": PAIR, "type": "sell", "ordertype": "market", "volume": f"{qty:.8f}"
+    })
+    if r.get("error"):
+        log.error(f"Kraken ERROR (SELL): {r['error']}")
+
+def handle_signal(signal: str, price: float):
+    """Dispatch principal pour BUY/SELL."""
+    if signal == "BUY":
+        open_buy(price)
+    elif signal == "SELL":
+        open_sell(price)
+    else:
+        log.info(f"Signal ignoré: {signal}")
+
+# ------------ FLASK ------------
 app = Flask(__name__)
 
-# =========================
-#  Utils
-# =========================
-class KrakenNetworkError(Exception):
-    pass
-
-def kraken_query_public(method, data=None, retries=HTTP_RETRIES):
-    for i in range(retries):
-        try:
-            resp = api.query_public(method, data or {})
-            return resp
-        except requests.exceptions.RequestException as e:
-            if i == retries - 1:
-                raise KrakenNetworkError(str(e))
-            time.sleep(HTTP_BACKOFF_S * (i + 1))
-
-def kraken_query_private(method, data=None, retries=HTTP_RETRIES):
-    for i in range(retries):
-        try:
-            resp = api.query_private(method, data or {})
-            return resp
-        except requests.exceptions.RequestException as e:
-            if i == retries - 1:
-                raise KrakenNetworkError(str(e))
-            time.sleep(HTTP_BACKOFF_S * (i + 1))
-
-def get_pair_info(pair):
-    """Récupère lot_decimals et ordermin (min size) depuis Kraken."""
-    resp = kraken_query_public("AssetPairs", {"pair": pair})
-    if "error" in resp and resp["error"]:
-        raise Exception(f"Kraken error AssetPairs: {resp['error']}")
-    # clé interne (ex: XXBTZEUR)
-    k = list(resp["result"].keys())[0]
-    info = resp["result"][k]
-    lot_decimals = info.get("lot_decimals", 8)
-    ordermin = float(info.get("ordermin", "0"))
-    return lot_decimals, ordermin
-
-def round_qty(qty, lot_decimals):
-    factor = 10 ** lot_decimals
-    return math.floor(qty * factor) / factor
-
-def get_price(pair):
-    """Dernier prix (mid entre ask/bid si possible)."""
-    resp = kraken_query_public("Ticker", {"pair": pair})
-    if "error" in resp and resp["error"]:
-        raise Exception(f"Kraken error Ticker: {resp['error']}")
-    k = list(resp["result"].keys())[0]
-    # c = last trade [price, volume], a = ask [price,...], b = bid [price,...]
-    last = float(resp["result"][k]["c"][0])
-    ask  = float(resp["result"][k]["a"][0])
-    bid  = float(resp["result"][k]["b"][0])
-    mid  = (ask + bid) / 2.0 if ask and bid else last
-    return mid
-
-def get_balances():
-    resp = kraken_query_private("Balance")
-    if "error" in resp and resp["error"]:
-        raise Exception(f"Kraken error Balance: {resp['error']}")
-    bal = resp["result"]
-    base_key  = f"X{BASE}" if f"X{BASE}" in bal else BASE
-    quote_key = f"Z{QUOTE}" if f"Z{QUOTE}" in bal else QUOTE
-    base_bal  = float(bal.get(base_key, "0"))
-    quote_bal = float(bal.get(quote_key, "0"))
-    return base_bal, quote_bal
-
-def safe_notional_eur():
-    """Renvoie le notional EUR utilisable (après réserve quote + buffer frais)."""
-    _, quote_bal = get_balances()
-    max_spend = max(0.0, quote_bal - DUST_RESERVE_QUOTE)
-    target = FIXED_EUR_PER_TRADE
-    raw = min(target, max_spend)
-    # marge de frais
-    return raw * (1.0 - FEE_BUFFER_PCT)
-
-def safe_qty_from_eur(price, lot_decimals, ordermin):
-    """Convertit un montant EUR en quantité base (BTC), arrondie et >= ordermin si possible."""
-    if price <= 0:
-        return 0.0
-    qty = safe_notional_eur() / price
-    qty = round_qty(qty, lot_decimals)
-    if qty < ordermin:
-        return 0.0
-    return qty
-
-def safe_qty_for_sell(lot_decimals, ordermin):
-    """Quantité base dispo pour SELL (en tenant compte de la dust réserve)."""
-    base_bal, _ = get_balances()
-    sellable = max(0.0, base_bal - DUST_RESERVE_BASE)
-    sellable = round_qty(sellable, lot_decimals)
-    if sellable < ordermin:
-        return 0.0
-    # On ne veut pas forcément TOUT vendre : limite à la quantité équivalente à FIXED_EUR_PER_TRADE si possible
-    price = get_price(PAIR)
-    max_qty_vs_eur = (FIXED_EUR_PER_TRADE * (1.0 - FEE_BUFFER_PCT)) / price
-    max_qty_vs_eur = round_qty(max_qty_vs_eur, lot_decimals)
-    if max_qty_vs_eur >= ordermin:
-        return max(ordermin, min(sellable, max_qty_vs_eur))
-    # Sinon, si le max EUR est trop petit, on vend ce qui est vendable si > ordermin
-    return sellable
-
-def place_market_order(side, pair, qty):
-    """Place un ordre marché (volume en base)."""
-    if qty <= 0:
-        return {"error": ["EOrder:Invalid volume"], "result": {}}
-
-    data = {
-        "pair": pair,
-        "type": side,                 # "buy" | "sell"
-        "ordertype": "market",
-        "volume": f"{qty:.10f}",
-        "oflags": "viqc"              # value in quote currency (ok pour market)
-    }
-    resp = kraken_query_private("AddOrder", data)
-    return resp
-
-def log(msg):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{ts} [INFO] {msg}", flush=True)
-
-# =========================
-#  Webhook
-# =========================
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        payload = request.get_json(force=True, silent=False)
-    except Exception:
-        # si TradingView a envoyé du texte brut
-        try:
-            payload = json.loads(request.data.decode("utf-8"))
-        except Exception:
-            return jsonify({"ok": False, "msg": "invalid json"}), 400
-
-    log(f"Raw alert: {json.dumps(payload)}")
-
-    signal = str(payload.get("signal", "")).upper()
-    symbol = str(payload.get("symbol", "")).upper().replace(":", "").replace("/", "")
-    # on ignore symbol/timeframe venant de TV si tu veux forcer le PAIR via env
-    pair = PAIR if PAIR else symbol
-
-    # tolérance prix (facultative, juste informative)
-    alert_price = None
-    try:
-        alert_price = float(payload.get("price")) if payload.get("price") is not None else None
-    except Exception:
-        alert_price = None
-
-    # récup infos pair
-    try:
-        lot_decimals, ordermin = get_pair_info(pair)
-    except Exception as e:
-        log(f"ERROR AssetPairs: {e}")
-        return jsonify({"ok": False, "msg": "assetpairs error"}), 200  # on répond 200 pour éviter retry TV
-
-    # prix spot
-    try:
-        price = get_price(pair)
-    except Exception as e:
-        log(f"ERROR Ticker: {e}")
-        return jsonify({"ok": False, "msg": "ticker error"}), 200
-
-    # log prix & déviation
-    if alert_price:
-        dev = abs(price - alert_price) / alert_price * 100.0
-        log(f"Alert price={alert_price:.2f} vs spot={price:.2f} (dev={dev:.2f}%)")
-
-    # ------------- ROUTAGE -------------
-    if signal == "BUY":
-        # Dimensionnement en EUR fixes -> qty base
-        qty = safe_qty_from_eur(price, lot_decimals, ordermin)
-        if qty <= 0:
-            log(f"BUY skipped: not enough EUR after reserves/fees or below ordermin. "
-                f"ordermin={ordermin}, lot_decimals={lot_decimals}")
-            return jsonify({"ok": True, "skipped": "not_enough_eur"}), 200
-
-        log(f"==> ORDER BUY {qty:.10f} {pair} ~{qty*price:.2f} {QUOTE} @ ~{price:.2f}")
-        resp = place_market_order("buy", pair, qty)
-
-        if resp.get("error"):
-            log(f"Kraken ERROR (BUY): {resp['error']}")
-            return jsonify({"ok": False, "kraken_error": resp["error"]}), 200
-
-        log(f"BUY ok: {resp['result']}")
-        return jsonify({"ok": True, "result": resp["result"]}), 200
-
-    elif signal == "SELL":
-        # Vérifie le stock et adapte
-        qty = safe_qty_for_sell(lot_decimals, ordermin)
-        if qty <= 0:
-            log(f"SELL skipped: not enough {BASE} available after dust reserve "
-                f"or below ordermin. ordermin={ordermin}, lot_decimals={lot_decimals}")
-            return jsonify({"ok": True, "skipped": "not_enough_base"}), 200
-
-        log(f"==> ORDER SELL {qty:.10f} {pair} ~{qty*price:.2f} {QUOTE} @ ~{price:.2f}")
-        resp = place_market_order("sell", pair, qty)
-
-        if resp.get("error"):
-            # Si jamais “Insufficient funds” malgré le check, on log et on sort proprement
-            log(f"Kraken ERROR (SELL): {resp['error']}")
-            return jsonify({"ok": False, "kraken_error": resp["error"]}), 200
-
-        log(f"SELL ok: {resp['result']}")
-        return jsonify({"ok": True, "result": resp["result"]}), 200
-
-    else:
-        log(f"Signal inconnu: {signal}")
-        return jsonify({"ok": True, "skipped": "unknown_signal"}), 200
-
-
-@app.route("/health", methods=["GET", "HEAD"])
+@app.get("/health")
 def health():
     return "ok", 200
 
+@app.post("/webhook")
+def webhook():
+    global last_alert_ts
+    data = request.get_json(silent=True) or {}
+    log.info(f"Raw alert: {json.dumps(data)}")
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+    # Cooldown
+    now = time.time()
+    if now - last_alert_ts < COOLDOWN_SEC:
+        log.info("Cooldown actif -> alerte ignorée")
+        return jsonify({"status": "cooldown"}), 200
+
+    # Lecture alertes TradingView (format JSON envoyé par Pine)
+    signal = str(data.get("signal", "")).upper()
+    price  = float(data.get("price", 0) or 0)
+
+    # Tolérance: si pas de prix fourni, on tente de récupérer le ticker
+    if price <= 0:
+        # récupération rapide côté public
+        r = api.query_public("Ticker", {"pair": PAIR})
+        try:
+            price = float(next(iter(r["result"].values()))["c"][0])
+        except Exception:
+            log.error("Impossible d’obtenir le prix – alerte ignorée")
+            return jsonify({"status": "no_price"}), 200
+
+    log.info(f"Alert price={price:.2f} | PAIR={PAIR} | ordermin={ORDERMIN}, lot_dec={LOT_DEC}")
+
+    # Exécution
+    handle_signal(signal, price)
+
+    last_alert_ts = now
+    return jsonify({"ok": True}), 200
+
+# Render lancera via gunicorn, pas besoin de app.run()
