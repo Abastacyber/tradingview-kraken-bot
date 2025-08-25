@@ -1,15 +1,5 @@
 # gunicorn.conf.py
-# Logs concis + utiles pour Render
-
-# Laisse access/error logs sur stdout/stderr (Render les capte)
 accesslog = "-"
-errorlog = "-"
+arrorlog = "-"
 loglevel = "info"
-
-# Format court lisible : [date] statut PATH durée_ms UA
-#  %(t)s -> date
-#  %(s)s -> HTTP status
-#  %(U)s -> chemin (sans query)
-#  %(M)s -> durée en ms
-#  %(a)s -> user-agent
-access_log_format = '%(t)s | %(s)s | %(U)s | %(M)sms | UA:%(a)s’
+# (pas de access_log_format pour l'instant)
