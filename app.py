@@ -4,7 +4,7 @@ import math
 import logging
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, request, jsonify
-from binance.spot import Spot as Binance
+from binance.client import Client
 from binance.error import ClientError
 
 # ====================
