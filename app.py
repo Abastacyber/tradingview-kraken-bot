@@ -1,3 +1,86 @@
+# app.py
+import os
+import time
+import json
+from flask import Flask, request, jsonify
+from binance.spot import Spot as BinanceSpot
+
+app = Flask(__name__)
+
+# --- ENV ---
+API_KEY = os.getenv("BINANCE_API_KEY", "")
+API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+BASE = os.getenv("BASE_SYMBOL", "BTC").upper()
+QUOTE = os.getenv("QUOTE_SYMBOL", "USDT").upper()
+SIZE_MODE = os.getenv("SIZE_MODE", "fixed_quote")  # fixed_quote | fixed_base
+FIXED_QUOTE = float(os.getenv("FIXED_QUOTE_PER_TRADE", "20"))
+FIXED_BASE = float(os.getenv("FIXED_BASE_PER_TRADE", "0.0005"))
+TP_PCT = float(os.getenv("FALLBACK_TP_PCT", "0.8"))
+SL_PCT = float(os.getenv("FALLBACK_SL_PCT", "0.5"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+SYMBOL = f"{BASE}{QUOTE}"
+
+# Client Spot
+client = BinanceSpot(key=API_KEY, secret=API_SECRET)
+
+def log(msg):
+    print(msg, flush=True)
+
+@app.get("/")
+def root():
+    return "TV → Binance Spot bot : OK"
+
+@app.get("/health")
+def health():
+    return jsonify({"ok": True, "symbol": SYMBOL})
+
+@app.post("/webhook")
+def webhook():
+    try:
+        data = request.get_json(force=True)
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"invalid json: {e}"}), 400
+
+    log(f"Webhook reçu : {data}")
+
+    signal = str(data.get("signal", "")).upper()     # BUY / SELL
+    price  = float(data.get("price", "0") or 0)
+    trail  = bool(str(data.get("trail_on", "false")).lower() == "true")
+
+    if signal not in ["BUY", "SELL"]:
+        return jsonify({"status": "ignored", "msg": "signal inconnu"}), 200
+
+    # Taille de l'ordre
+    qty = 0.0
+    if SIZE_MODE == "fixed_quote":
+        if price <= 0:
+            # récupère le dernier prix si absent
+            ticker = client.ticker_price(symbol=SYMBOL)
+            price = float(ticker["price"])
+        qty = round(FIXED_QUOTE / price, 6)
+    else:
+        qty = FIXED_BASE
+
+    side = "BUY" if signal == "BUY" else "SELL"
+
+    try:
+        # ORDRE AU MARCHÉ
+        order = client.new_order(
+            symbol=SYMBOL,
+            side=side,
+            type="MARKET",
+            quantity=f"{qty:.6f}"
+        )
+        log(f"Ordre Binance {side} OK: {order}")
+
+        # (Optionnel) placer TP/SL via OCO uniquement si side=BUY (simplifié)
+        # À activer plus tard si besoin.
+
+        return jsonify({"status": "success", "orderId": order.get("orderId")})
+    except Exception as e:
+        log(f"Erreur Binance: {e}")
+        return jsonify({"status": "error", "msg": str(e)}), 500
 import os
 import time
 import math
