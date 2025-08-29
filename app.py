@@ -1,131 +1,81 @@
-import os
-import sys
-import logging
-import ccxt
 from flask import Flask, request, jsonify
+import logging
+from phemex_api import PhemexAPI  # Assurez-vous que cette classe existe et est configurée
 
-# ==============================================================================
-# SCRIPT DE BOT DE TRADING POUR PHEMEX AVEC FLASK
-# Ce script utilise l'API de Phemex via la bibliothèque CCXT pour le trading
-# et reçoit des alertes de TradingView via un webhook.
-#
-# Auteur : Gemini (avec vos instructions)
-# Version : 3.0 (Correction de l'erreur 'unexpected keyword argument')
-# ==============================================================================
-
-# ==============================================================================
-# 1. CONFIGURATION INITIALE
-# ==============================================================================
-
-# Configurez le logging pour voir les messages dans les Logs de Render.
-logging.basicConfig(level=logging.INFO, stream=sys.stdout,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Initialisation de l'application Flask.
 app = Flask(__name__)
 
-# Récupérez vos clés API Phemex depuis les variables d'environnement de Render.
-API_KEY = os.environ.get('PHEMEX_API_KEY')
-API_SECRET = os.environ.get('PHEMEX_API_SECRET')
+# Configurez le logging pour un meilleur débogage
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Vérifiez que les clés API sont bien chargées.
-if not API_KEY or not API_SECRET:
-    logging.error("Erreur : Les variables d'environnement 'PHEMEX_API_KEY' et/ou 'PHEMEX_API_SECRET' ne sont pas définies.")
-    sys.exit(1)
+# Remplacez les valeurs ci-dessous par vos vraies clés
+phemex_api_key = "VOTRE_CLE_API_PHEMEX"
+phemex_api_secret = "VOTRE_SECRET_API_PHEMEX"
+phemex_client = PhemexAPI(phemex_api_key, phemex_api_secret)
 
-# Initialisation du client Phemex via la bibliothèque CCXT.
-# Nous ajoutons 'options' pour spécifier le type de compte.
-try:
-    phemex = ccxt.phemex({
-        'apiKey': API_KEY,
-        'secret': API_SECRET,
-        'enableRateLimit': True,
-        'options': {
-            'defaultType': 'swap',  # ou 'future', 'spot' selon votre type de trading
-        }
-    })
-    
-    # Test de la connexion en récupérant le solde du compte.
-    balance = phemex.fetch_balance()
-    logging.info("Connexion à l'API Phemex réussie.")
-    logging.info(f"Solde du compte : {balance['total']}")
-except Exception as e:
-    logging.error(f"Une erreur est survenue lors de la connexion à Phemex. Vérifiez vos clés API et les permissions : {e}")
-    sys.exit(1)
-
-# ==============================================================================
-# 2. ENDPOINTS DU WEBHOOK ET DE SURVEILLANCE
-# ==============================================================================
-
-# Nouvelle route pour la surveillance (comme Uptime Robot).
-# Elle répond simplement OK pour indiquer que le bot est en vie.
-@app.route('/', methods=['GET'])
-def index():
-    return "OK", 200
-
-# Cette route reçoit les alertes de TradingView.
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    """
-    Traite les requêtes POST du webhook de TradingView.
-    """
-    logging.info("Requête Webhook reçue.")
+def webhook_receiver():
     try:
         data = request.json
         if not data:
-            return jsonify({"status": "error", "message": "Payload JSON manquant"}), 400
+            logging.error("Données de webhook manquantes.")
+            return jsonify({"status": "error", "message": "Données manquantes"}), 400
 
-        logging.info(f"Payload de l'alerte reçu : {data}")
+        logging.info(f"Webhook reçu: {data}")
 
-        symbol = data.get('symbol')
+        # Extrait l'action de TradingView
         action = data.get('action')
-        quantity = data.get('quantity')
+        symbol = data.get('symbol')
+        price = data.get('price')
+        volume = data.get('volume', 0.01)  # Définir un volume par défaut
 
-        if not all([symbol, action, quantity]):
-            return jsonify({"status": "error", "message": "Données d'alerte incomplètes (symbole, action, quantité)"}), 400
+        if not action or not symbol or not price:
+            logging.error("Action, symbole ou prix manquant dans le payload.")
+            return jsonify({"status": "error", "message": "Payload incomplet"}), 400
 
-        # ======================================================================
-        # 3. EXÉCUTION DES ORDRES
-        # ======================================================================
+        # S'assurer que les valeurs sont numériques
+        try:
+            volume = float(volume)
+            price = float(price)
+        except (ValueError, TypeError):
+            logging.error(f"Erreur de conversion des données: volume={volume}, price={price}")
+            return jsonify({"status": "error", "message": "Volume ou prix invalide"}), 400
 
-        if action == 'BUY':
-            logging.info(f"Alerte d'achat reçue. Exécution d'un ordre d'achat pour {symbol} avec une quantité de {quantity}.")
-            try:
-                # Correction de l'erreur : Utilisation de la fonction create_order
-                # pour éviter le problème de mot-clé avec create_market_buy_order.
-                order = phemex.create_order(
-                    symbol=symbol,
-                    type='market',
-                    side='buy',
-                    amount=quantity
-                )
-                logging.info(f"Ordre d'achat exécuté avec succès : {order}")
-                return jsonify({"status": "success", "message": "Ordre d'achat exécuté"}), 200
-            except Exception as e:
-                logging.error(f"Erreur lors de l'exécution de l'ordre d'achat: {e}")
-                return jsonify({"status": "error", "message": f"Erreur lors de l'exécution de l'ordre d'achat: {str(e)}"}), 500
+        if action == "buy":
+            logging.info(f"Alerte d'achat reçue pour {symbol} à {price} avec un volume de {volume}.")
+            # Log de l'API Phemex avant l'appel
+            logging.info(f"Tentative de passage d'ordre d'achat sur Phemex pour {symbol}...")
+            # Remplacez "YOUR_PRODUCT_TYPE" par "linear", "spot", ou "contract"
+            order_result = phemex_client.create_order(symbol, 'buy', volume, price, 'limit', 'YOUR_PRODUCT_TYPE')
+            logging.info(f"Résultat de l'ordre d'achat: {order_result}")
 
-        elif action == 'SELL':
-            logging.info(f"Alerte de vente reçue. Exécution d'un ordre de vente pour {symbol} avec une quantité de {quantity}.")
-            try:
-                # Correction de l'erreur : Utilisation de la fonction create_order
-                # pour éviter le problème de mot-clé avec create_market_sell_order.
-                order = phemex.create_order(
-                    symbol=symbol,
-                    type='market',
-                    side='sell',
-                    amount=quantity
-                )
-                logging.info(f"Ordre de vente exécuté avec succès : {order}")
-                return jsonify({"status": "success", "message": "Ordre de vente exécuté"}), 200
-            except Exception as e:
-                logging.error(f"Erreur lors de l'exécution de l'ordre de vente: {e}")
-                return jsonify({"status": "error", "message": f"Erreur lors de l'exécution de l'ordre de vente: {str(e)}"}), 500
+            if order_result and order_result.get('code') == 0:
+                logging.info(f"Ordre d'achat passé avec succès pour {symbol}!")
+                return jsonify({"status": "success", "message": "Ordre d'achat passé"}), 200
+            else:
+                logging.error(f"Échec du passage de l'ordre d'achat pour {symbol}. Réponse de l'API: {order_result}")
+                return jsonify({"status": "error", "message": "Échec de l'ordre d'achat"}), 500
+
+        elif action == "sell":
+            logging.info(f"Alerte de vente reçue pour {symbol} à {price} avec un volume de {volume}.")
+            logging.info(f"Tentative de passage d'ordre de vente sur Phemex pour {symbol}...")
+            # Remplacez "YOUR_PRODUCT_TYPE" par "linear", "spot", ou "contract"
+            order_result = phemex_client.create_order(symbol, 'sell', volume, price, 'limit', 'YOUR_PRODUCT_TYPE')
+            logging.info(f"Résultat de l'ordre de vente: {order_result}")
+
+            if order_result and order_result.get('code') == 0:
+                logging.info(f"Ordre de vente passé avec succès pour {symbol}!")
+                return jsonify({"status": "success", "message": "Ordre de vente passé"}), 200
+            else:
+                logging.error(f"Échec du passage de l'ordre de vente pour {symbol}. Réponse de l'API: {order_result}")
+                return jsonify({"status": "error", "message": "Échec de l'ordre de vente"}), 500
 
         else:
-            logging.warning(f"Action non reconnue : {action}")
-            return jsonify({"status": "error", "message": "Action non reconnue"}), 400
+            logging.warning(f"Action non reconnue: {action}")
+            return jsonify({"status": "warning", "message": "Action non reconnue"}), 400
 
     except Exception as e:
-        logging.error(f"Erreur lors du traitement de la requête: {e}")
-        return jsonify({"status": "error", "message": f"Erreur lors du traitement de la requête: {str(e)}"}), 500
+        logging.critical(f"Erreur fatale dans le webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Erreur interne"}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
