@@ -1,138 +1,185 @@
-# Fichier : app.py
+import os, time, math, logging
+from decimal import Decimal, ROUND_DOWN
 from flask import Flask, request, jsonify
-import os
-import requests
-import json
-import hmac
-import hashlib
-import base64
-import time
+
+# --- Binance (SDK officiel moderne) ---
+# pip install binance-connector
+from binance.spot import Spot as Binance
 
 app = Flask(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+log = logging.getLogger("tv-binance-bot")
 
-# ==============================
-# 0) VARIABLES D'ENVIRONNEMENT (À CONFIGURER SUR RENDER)
-# ==============================
-OKX_API_KEY = os.getenv("OKX_API_KEY")
-OKX_API_SECRET = os.getenv("OKX_API_SECRET")
-OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
+# =========
+# ENV VARS
+# =========
+API_KEY             = os.getenv("BINANCE_API_KEY", "")
+API_SECRET          = os.getenv("BINANCE_API_SECRET", "")
+SYMBOL_DEFAULT      = os.getenv("SYMBOL", "BTCUSDT").upper()          # ex: BTCUSDT
+ORDER_TYPE          = os.getenv("ORDER_TYPE", "market").lower()      # market uniquement ici
+SIZE_MODE           = os.getenv("SIZE_MODE", "fixed_quote").lower()  # fixed_quote | fixed_qty
+FIXED_QUOTE_PER_TRADE = Decimal(os.getenv("FIXED_QUOTE_PER_TRADE", "20"))  # en USDT
+FIXED_QTY_PER_TRADE   = Decimal(os.getenv("FIXED_QTY_PER_TRADE", "0.001")) # en BASE
 
-BASE = os.getenv("BASE", "BTC")
-QUOTE = os.getenv("QUOTE", "USDT")
-ORDER_TYPE = os.getenv("ORDER_TYPE", "market")
-SIZE_MODE = os.getenv("SIZE_MODE", "fixed_eur")
-FIXED_EUR_PER_TRADE = float(os.getenv("FIXED_EUR_PER_TRADE", 50.0))
-FALLBACK_SL_PCT = float(os.getenv("FALLBACK_SL_PCT", 1.0))
-FALLBACK_TP_PCT = float(os.getenv("FALLBACK_TP_PCT", 0.6))
-TRAIL_START_PCT = float(os.getenv("TRAIL_START_PCT", 0.6))
-TRAIL_STEP_PCT = float(os.getenv("TRAIL_STEP_PCT", 0.3))
+# Fallback TP/SL si TradingView n’envoie rien
+FALLBACK_TP_PCT     = Decimal(os.getenv("FALLBACK_TP_PCT", "0.8"))   # %
+FALLBACK_SL_PCT     = Decimal(os.getenv("FALLBACK_SL_PCT", "0.5"))   # %
 
-# ==============================
-# 1) FONCTION D'APPEL À L'API OKX
-# ==============================
-def place_okx_order(symbol, side, price, sz):
-    """
-    Passe un ordre de trading sur OKX en utilisant leur API.
-    """
-    url = "https://www.okx.com/api/v5/trade/order"
-    # Utilisation d'un timestamp en millisecondes pour éviter les problèmes de signature
-    timestamp = str(int(time.time() * 1000))
-    
-    # Construction du corps de la requête
-    body = {
-        "instId": f"{BASE}-{QUOTE}",
-        "tdMode": "cash",  # Utilisation du mode cash
-        "side": side,
-        "ordType": ORDER_TYPE,
-        "sz": str(sz),
-        "ccy": QUOTE # Spécifie la devise de référence
-    }
-    
-    # Création de la chaîne de signature
-    # Le 'request_path' est l'URL après le domaine
-    prehash = timestamp + "POST" + url.replace("https://www.okx.com", "") + json.dumps(body)
-    
-    signature = base64.b64encode(
-        hmac.new(
-            OKX_API_SECRET.encode('utf-8'),
-            prehash.encode('utf-8'),
-            hashlib.sha256
-        ).digest()
-    ).decode('utf-8')
-    
-    # Définition des headers
-    headers = {
-        "OK-ACCESS-KEY": OKX_API_KEY,
-        "OK-ACCESS-SIGN": signature,
-        "OK-ACCESS-TIMESTAMP": timestamp,
-        "OK-ACCESS-PASSPHRASE": OKX_API_PASSPHRASE,
-        "Content-Type": "application/json"
-    }
+# Sécurité / anti-spam
+COOLDOWN_SEC        = int(os.getenv("COOLDOWN_SEC", "5"))
+_last_order_ts      = 0
 
-    try:
-        print(f"Tentative de placement d'ordre : {body}")
-        response = requests.post(url, headers=headers, data=json.dumps(body))
-        response.raise_for_status()  # Lève une exception pour les codes d'erreur HTTP (4xx ou 5xx)
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Erreur lors de l'appel à l'API OKX: {e}")
-        return {"code": -1, "msg": str(e)}
+# Client Binance
+client = Binance(api_key=API_KEY, api_secret=API_SECRET)
 
-# ==============================
-# 2) ENDPOINT POUR LES ALERTES TRADINGVIEW
-# ==============================
-@app.route('/webhook', methods=['POST'])
+# =========
+# Helpers
+# =========
+def get_filters(symbol: str):
+    """Récupère tickSize, stepSize, minNotional pour arrondir correctement."""
+    info = client.exchange_info(symbol=symbol)
+    f = info["symbols"][0]["filters"]
+    price_filter = next(x for x in f if x["filterType"] == "PRICE_FILTER")
+    lot_filter   = next(x for x in f if x["filterType"] == "LOT_SIZE")
+    notion_filter= next(x for x in f if x["filterType"] == "NOTIONAL" or x["filterType"]=="MIN_NOTIONAL")
+    return Decimal(price_filter["tickSize"]), Decimal(lot_filter["stepSize"]), Decimal(notion_filter.get("minNotional","0"))
+
+def quantize(value: Decimal, step: Decimal) -> Decimal:
+    """Coupe à l’incrément autorisé (pas d’arrondi vers le haut)."""
+    if step == 0:
+        return value
+    precision = max(0, -step.as_tuple().exponent)
+    return (value // step) * step if step > 0 else value.quantize(Decimal(10) ** -precision, rounding=ROUND_DOWN)
+
+def get_avg_fill_price(order_resp) -> Decimal:
+    """Calcule le prix moyen exécuté à partir de la réponse Binance MARKET."""
+    # new_order_resp_type par défaut = RESULT => 'fills' peut être vide; on récupère cummulativeQuoteQty/executedQty
+    executed_qty = Decimal(order_resp.get("executedQty", "0"))
+    quote_qty    = Decimal(order_resp.get("cummulativeQuoteQty", "0"))
+    if executed_qty > 0:
+        return (quote_qty / executed_qty).quantize(Decimal("0.00000001"))
+    # fallback (rare)
+    fills = order_resp.get("fills", [])
+    if fills:
+        total = sum(Decimal(f["price"]) * Decimal(f["qty"]) for f in fills)
+        qty   = sum(Decimal(f["qty"]) for f in fills)
+        return (total/qty).quantize(Decimal("0.00000001"))
+    raise RuntimeError("Impossible de déterminer le prix moyen exécuté.")
+
+def place_market_buy(symbol: str, quote_amount: Decimal|None, qty_amount: Decimal|None):
+    """Place un BUY au marché. On privilégie quoteOrderQty (montant en USDT)."""
+    if quote_amount and quote_amount > 0:
+        resp = client.new_order(
+            symbol=symbol, side="BUY", type="MARKET",
+            quoteOrderQty=str(quote_amount)  # Binance arrondit la qty selon LOT_SIZE
+        )
+    else:
+        resp = client.new_order(
+            symbol=symbol, side="BUY", type="MARKET",
+            quantity=str(qty_amount)
+        )
+    return resp
+
+def place_oco_sell(symbol: str, qty: Decimal, tp_price: Decimal, sl_price: Decimal):
+    """Place un OCO SELL (TP limit + SL stop-limit)."""
+    tick, step, _ = get_filters(symbol)
+    qty      = quantize(qty, step)
+    tp_price = quantize(tp_price, tick)
+    sl_price = quantize(sl_price, tick)
+
+    # Sur Spot, l’OCO nécessite stopPrice + stopLimitPrice (léger décalage recommandé)
+    stop_limit_price = quantize(sl_price * Decimal("0.999"), tick)
+
+    resp = client.new_oco_order(
+        symbol=symbol, side="SELL", quantity=str(qty),
+        price=str(tp_price),
+        stopPrice=str(sl_price),
+        stopLimitPrice=str(stop_limit_price),
+        stopLimitTimeInForce="GTC"
+    )
+    return resp
+
+# ===================
+# Webhook TradingView
+# ===================
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    """
-    Reçoit les alertes JSON de TradingView et passe des ordres sur OKX.
-    """
+    global _last_order_ts
+    now = time.time()
+    if now - _last_order_ts < COOLDOWN_SEC:
+        return jsonify({"ok": True, "skipped": "cooldown"}), 200
+
+    data = request.get_json(force=True, silent=True) or {}
+    log.info(f"Alerte reçue: {data}")
+
+    signal = str(data.get("signal", "")).upper()           # BUY / SELL
+    symbol = str(data.get("symbol", SYMBOL_DEFAULT)).upper()
+
+    # Paramètres TP/SL reçus ou fallback
+    tp_pct = Decimal(str(data.get("tp_pct", FALLBACK_TP_PCT)))
+    sl_pct = Decimal(str(data.get("sl_pct", FALLBACK_SL_PCT)))
+
+    if signal not in ("BUY", "SELL"):
+        return jsonify({"ok": False, "error": "signal invalide"}), 400
+
+    # BUY = ouvre un long sur Spot (achat de l’actif)
+    # SELL = sur Spot on ne shorte pas; ici on interprète SELL comme “fermer/stopper” une position existante → on ne l’automatise pas (optionnel)
+    if signal == "SELL":
+        log.info("Signal SELL reçu (Spot ne shorte pas). Aucun ordre marché automatique envoyé.")
+        return jsonify({"ok": True, "note": "SELL ignoré sur Spot (pas de short)."}), 200
+
     try:
-        data = request.json
-        print(f"Alerte reçue de TradingView : {data}")
+        tick, step, min_notional = get_filters(symbol)
 
-        # Vérification basique de la validité des données
-        if not data or 'signal' not in data:
-            return jsonify({"status": "error", "message": "Données JSON invalides"}), 400
-
-        signal = data.get('signal')
-        symbol = data.get('symbol')
-        price_str = data.get('price')
-
-        if not all([signal, symbol, price_str]):
-            print("Données manquantes dans le payload.")
-            return jsonify({"status": "error", "message": "Données de signal manquantes"}), 400
-
-        try:
-            price = float(price_str)
-        except ValueError:
-            print(f"Erreur de conversion de prix : {price_str}")
-            return jsonify({"status": "error", "message": "Erreur de format de prix"}), 400
-        
-        # Calcul de la taille de l'ordre en fonction du mode (pour l'instant, seulement FIXED_EUR)
-        order_size = FIXED_EUR_PER_TRADE / price
-
-        # Logique de trading
-        if signal == 'BUY':
-            print(f"Signal d'achat reçu pour {symbol}. Taille de l'ordre : {order_size:.4f}")
-            order_result = place_okx_order(symbol=symbol, side="buy", price=price, sz=order_size)
-            print(f"Résultat de l'ordre OKX (BUY) : {order_result}")
-            return jsonify({"status": "success", "order": order_result})
-
-        elif signal == 'SELL':
-            print(f"Signal de vente reçu pour {symbol}. Taille de l'ordre : {order_size:.4f}")
-            order_result = place_okx_order(symbol=symbol, side="sell", price=price, sz=order_size)
-            print(f"Résultat de l'ordre OKX (SELL) : {order_result}")
-            return jsonify({"status": "success", "order": order_result})
-
+        # --- Taille de l’ordre ---
+        market_price = Decimal(client.ticker_price(symbol)["price"])
+        if SIZE_MODE == "fixed_quote":
+            quote_amt = FIXED_QUOTE_PER_TRADE
+            if quote_amt < min_notional:
+                raise ValueError(f"FIXED_QUOTE_PER_TRADE {quote_amt} < minNotional {min_notional}")
+            qty_amt = None
+        elif SIZE_MODE == "fixed_qty":
+            qty_amt = quantize(FIXED_QTY_PER_TRADE, step)
+            quote_amt = None
+            if (qty_amt * market_price) < min_notional:
+                raise ValueError("fixed_qty trop petit pour le minNotional de Binance.")
         else:
-            print(f"Signal non reconnu: {signal}")
-            return jsonify({"status": "success", "message": "Signal non pris en charge"}), 200
+            raise ValueError("SIZE_MODE invalide. Utilise 'fixed_quote' ou 'fixed_qty'.")
+
+        # --- Achat marché ---
+        buy = place_market_buy(symbol, quote_amt, qty_amt)
+        _last_order_ts = now
+        log.info(f"Ordre BUY exécuté: {buy}")
+
+        # Prix moyen et qty exécutée
+        avg = get_avg_fill_price(buy)
+        executed_qty = Decimal(buy.get("executedQty", "0"))
+        if executed_qty == 0:
+            # si on a utilisé quoteOrderQty, récupérer l’asset achetée via compte
+            time.sleep(0.5)
+            executed_qty = Decimal(client.get_order(symbol=symbol, orderId=buy["orderId"]).get("executedQty", "0"))
+
+        # --- TP / SL en OCO (SELL) ---
+        tp_price = avg * (Decimal(1) + tp_pct/Decimal(100))
+        sl_price = avg * (Decimal(1) - sl_pct/Decimal(100))
+        oco = place_oco_sell(symbol, executed_qty, tp_price, sl_price)
+        log.info(f"OCO placé (TP/SL): {oco}")
+
+        return jsonify({
+            "ok": True,
+            "avg": str(avg),
+            "executedQty": str(executed_qty),
+            "tp_pct": str(tp_pct),
+            "sl_pct": str(sl_pct),
+            "tp_price": str(tp_price),
+            "sl_price": str(sl_price)
+        }), 200
 
     except Exception as e:
-        print(f"Une erreur inattendue est survenue : {e}")
-        return jsonify({"status": "error", "message": f"Erreur du serveur : {e}"}), 500
+        log.exception("Erreur traitement webhook")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
-if __name__ == '__main__':
-    # Le port 10000 est requis par Render pour les services Web
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+
+@app.get("/")
+def root():
+    return "TV → Binance Spot bot : OK", 200
