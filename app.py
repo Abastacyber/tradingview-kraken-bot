@@ -1,58 +1,131 @@
 import os
 import sys
+import logging
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
-import time
+from flask import Flask, request, jsonify
 
-# Script de diagnostic pour vérifier la validité des clés API de Binance sur Render.
+# ==============================================================================
+# SCRIPT DE BOT DE TRADING POUR BINANCE AVEC FLASK
+# Ce script utilise l'API de Binance pour le trading et reçoit des alertes
+# de TradingView via un webhook.
+#
+# Auteur : Gemini (avec vos instructions)
+# Version : 1.0
+# ==============================================================================
 
-# Fonction principale pour exécuter le diagnostic
-def run_diagnostic():
-    print("Démarrage du script de diagnostic...")
-    
-    # 1. Vérification des variables d'environnement
-    api_key = os.environ.get('BINANCE_API_KEY')
-    api_secret = os.environ.get('BINANCE_API_SECRET')
+# ==============================================================================
+# 1. CONFIGURATION INITIALE
+# ==============================================================================
 
-    if not api_key:
-        print("Erreur : La variable d'environnement 'BINANCE_API_KEY' n'est pas définie.")
-        # Utiliser sys.exit(1) pour forcer le déploiement à échouer et afficher le message dans les logs de Render
-        sys.exit(1)
-    if not api_secret:
-        print("Erreur : La variable d'environnement 'BINANCE_API_SECRET' n'est pas définie.")
-        sys.exit(1)
+# Configurez le logging pour voir les messages dans les Logs de Render.
+# Utilisez logging.INFO pour les messages d'information standard.
+logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-    print("Variables d'environnement API détectées avec succès.")
-    
-    # 2. Création du client et test de connexion
+# Initialisation de l'application Flask.
+# Le nom de l'application est 'app'.
+app = Flask(__name__)
+
+# Récupérez vos clés API depuis les variables d'environnement de Render.
+# Assurez-vous d'avoir configuré BINANCE_API_KEY et BINANCE_API_SECRET dans
+# la section 'Environment' de votre service Render.
+API_KEY = os.environ.get('BINANCE_API_KEY')
+API_SECRET = os.environ.get('BINANCE_API_SECRET')
+
+# Vérifiez que les clés API sont bien chargées.
+if not API_KEY or not API_SECRET:
+    logging.error("Erreur : Les variables d'environnement 'BINANCE_API_KEY' et/ou 'BINANCE_API_SECRET' ne sont pas définies.")
+    # Renvoie une erreur pour empêcher l'initialisation du client sans clés.
+    sys.exit(1)
+
+# Initialisation du client Binance.
+# C'est l'objet client qui est créé pour interagir avec l'API de Binance.
+try:
+    client = Client(API_KEY, API_SECRET)
+    logging.info("Client Binance initialisé avec succès. Connexion API vérifiée.")
+except BinanceAPIException as e:
+    logging.error(f"Échec de la connexion à l'API de Binance: {e.message}")
+    sys.exit(1)
+except Exception as e:
+    logging.error(f"Une erreur inattendue est survenue lors de la connexion API: {e}")
+    sys.exit(1)
+
+# ==============================================================================
+# 2. ENDPOINT DU WEBHOOK
+# ==============================================================================
+
+# Ce point de terminaison reçoit les alertes de TradingView.
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """
+    Traite les requêtes POST du webhook de TradingView.
+    """
+    logging.info("Requête Webhook reçue.")
     try:
-        # Crée un client Binance avec les clés API
-        print("Tentative de création du client Binance...")
-        client = Client(api_key, api_secret)
-        print("Client créé avec succès.")
+        # Lisez le payload JSON de l'alerte.
+        data = request.json
+        if not data:
+            return jsonify({"status": "error", "message": "Payload JSON manquant"}), 400
 
-        # Tente une requête simple et non sensible pour vérifier la connexion
-        print("Tentative de récupération de l'heure du serveur pour valider la connexion...")
-        server_time = client.get_server_time()
-        print(f"Connexion à l'API de Binance réussie. Heure du serveur : {server_time['serverTime']}")
-        
-        # Le script se terminera avec succès
-        print("Diagnostic terminé avec succès. Les clés API sont valides.")
-        
-    except BinanceAPIException as e:
-        # Gère les erreurs spécifiques de l'API Binance
-        print("Échec de la connexion à l'API de Binance.")
-        print(f"Code d'erreur : {e.code}")
-        print(f"Message d'erreur : {e.message}")
-        print("Diagnostic terminé avec échec. Les clés API sont invalides. Veuillez vérifier leur format ou leurs permissions sur le site de Binance.")
-        # Forcer le script à échouer pour que l'erreur soit visible dans les logs de Render
-        sys.exit(1)
+        logging.info(f"Payload de l'alerte reçu : {data}")
+
+        # Vérifiez que le message contient les informations nécessaires.
+        symbol = data.get('symbol')
+        action = data.get('action')
+        quantity = data.get('quantity')
+
+        if not all([symbol, action, quantity]):
+            return jsonify({"status": "error", "message": "Données d'alerte incomplètes (symbole, action, quantité)"}), 400
+
+        # ======================================================================
+        # 3. EXÉCUTION DES ORDRES
+        # ======================================================================
+
+        if action == 'BUY':
+            logging.info(f"Alerte d'achat reçue. Exécution d'un ordre d'achat pour {symbol} avec une quantité de {quantity}.")
+            try:
+                # Appelle la fonction correcte pour créer un ordre d'achat.
+                order = client.create_order(
+                    symbol=symbol,
+                    side='BUY',
+                    type='MARKET',
+                    quantity=quantity
+                )
+                logging.info(f"Ordre d'achat exécuté avec succès : {order}")
+                return jsonify({"status": "success", "message": "Ordre d'achat exécuté"}), 200
+            except BinanceAPIException as e:
+                logging.error(f"Erreur lors de l'exécution de l'ordre d'achat: {e.message}")
+                return jsonify({"status": "error", "message": f"Erreur lors de l'exécution de l'ordre d'achat: {str(e)}"}), 500
+            except Exception as e:
+                logging.error(f"Erreur inattendue lors de l'achat: {e}")
+                return jsonify({"status": "error", "message": f"Erreur inattendue lors de l'achat: {str(e)}"}), 500
+
+        elif action == 'SELL':
+            logging.info(f"Alerte de vente reçue. Exécution d'un ordre de vente pour {symbol} avec une quantité de {quantity}.")
+            try:
+                # Appelle la fonction correcte pour créer un ordre de vente.
+                order = client.create_order(
+                    symbol=symbol,
+                    side='SELL',
+                    type='MARKET',
+                    quantity=quantity
+                )
+                logging.info(f"Ordre de vente exécuté avec succès : {order}")
+                return jsonify({"status": "success", "message": "Ordre de vente exécuté"}), 200
+            except BinanceAPIException as e:
+                logging.error(f"Erreur lors de l'exécution de l'ordre de vente: {e.message}")
+                return jsonify({"status": "error", "message": f"Erreur lors de l'exécution de l'ordre de vente: {str(e)}"}), 500
+            except Exception as e:
+                logging.error(f"Erreur inattendue lors de la vente: {e}")
+                return jsonify({"status": "error", "message": f"Erreur inattendue lors de la vente: {str(e)}"}), 500
+
+        else:
+            logging.warning(f"Action non reconnue : {action}")
+            return jsonify({"status": "error", "message": "Action non reconnue"}), 400
+
     except Exception as e:
-        # Gère toutes les autres erreurs
-        print("Une erreur inattendue est survenue.")
-        print(f"Détails de l'erreur : {e}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    run_diagnostic()
+        # Gère les erreurs de format JSON ou d'autres erreurs inattendues.
+        logging.error(f"Erreur lors du traitement de la requête: {e}")
+        return jsonify({"status": "error", "message": f"Erreur lors du traitement de la requête: {str(e)}"}), 500
 
