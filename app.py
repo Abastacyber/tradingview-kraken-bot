@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 # et reçoit des alertes de TradingView via un webhook.
 #
 # Auteur : Gemini (avec vos instructions)
-# Version : 2.1 (gestion de l'erreur Uptime Robot)
+# Version : 3.0 (Correction de l'erreur 'unexpected keyword argument')
 # ==============================================================================
 
 # ==============================================================================
@@ -91,8 +91,12 @@ def webhook():
         if action == 'BUY':
             logging.info(f"Alerte d'achat reçue. Exécution d'un ordre d'achat pour {symbol} avec une quantité de {quantity}.")
             try:
-                order = phemex.create_market_buy_order(
+                # Correction de l'erreur : Utilisation de la fonction create_order
+                # pour éviter le problème de mot-clé avec create_market_buy_order.
+                order = phemex.create_order(
                     symbol=symbol,
+                    type='market',
+                    side='buy',
                     amount=quantity
                 )
                 logging.info(f"Ordre d'achat exécuté avec succès : {order}")
@@ -104,8 +108,12 @@ def webhook():
         elif action == 'SELL':
             logging.info(f"Alerte de vente reçue. Exécution d'un ordre de vente pour {symbol} avec une quantité de {quantity}.")
             try:
-                order = phemex.create_market_sell_order(
+                # Correction de l'erreur : Utilisation de la fonction create_order
+                # pour éviter le problème de mot-clé avec create_market_sell_order.
+                order = phemex.create_order(
                     symbol=symbol,
+                    type='market',
+                    side='sell',
                     amount=quantity
                 )
                 logging.info(f"Ordre de vente exécuté avec succès : {order}")
