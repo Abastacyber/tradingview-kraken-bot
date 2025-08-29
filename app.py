@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 # et reçoit des alertes de TradingView via un webhook.
 #
 # Auteur : Gemini (avec vos instructions)
-# Version : 2.0 (correction de l'erreur "Invalid account group id")
+# Version : 2.1 (gestion de l'erreur Uptime Robot)
 # ==============================================================================
 
 # ==============================================================================
@@ -54,10 +54,16 @@ except Exception as e:
     sys.exit(1)
 
 # ==============================================================================
-# 2. ENDPOINT DU WEBHOOK
+# 2. ENDPOINTS DU WEBHOOK ET DE SURVEILLANCE
 # ==============================================================================
 
-# Ce point de terminaison reçoit les alertes de TradingView.
+# Nouvelle route pour la surveillance (comme Uptime Robot).
+# Elle répond simplement OK pour indiquer que le bot est en vie.
+@app.route('/', methods=['GET'])
+def index():
+    return "OK", 200
+
+# Cette route reçoit les alertes de TradingView.
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """
