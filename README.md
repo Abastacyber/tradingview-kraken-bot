@@ -1,10 +1,10 @@
-# TradingView → Kraken Bot (Render)
+# TradingView → Binance Bot (Render)
 
-Flask app qui reçoit des webhooks TradingView et (en papier) calcule une qty selon un risque en EUR. Mapping BTC→XBT pour Kraken.
+Flask app qui reçoit des webhooks TradingView et (en papier) calcule une qty selon un risque en EUR. Mapping BTC→USDT pour Binance.
 
 ## Variables d'env (Render)
 - BASE_SYMBOL=BTC
-- QUOTE_SYMBOL=EUR
+- QUOTE_SYMBOL=USDT
 - PAPER_MODE=1
 - RISK_EUR_PER_TRADE=25
 - KRAKEN_API_KEY=...
