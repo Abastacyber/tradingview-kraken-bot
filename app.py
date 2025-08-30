@@ -1,81 +1,67 @@
-from flask import Flask, request, jsonify
-import logging
-from phemex_api import PhemexAPI  # Assurez-vous que cette classe existe et est configurée
+import requests
+import hmac
+import hashlib
+import time
+import json
+import uuid
 
-app = Flask(__name__)
+class PhemexAPI:
+    def __init__(self, api_key, api_secret, base_url="https://api.phemex.com"):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.base_url = base_url
+    
+    def _generate_signature(self, path, query_string):
+        """
+        Génère une signature HMAC-SHA256 pour l'authentification de la requête.
+        """
+        message = path + query_string
+        signature = hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+        return signature
 
-# Configurez le logging pour un meilleur débogage
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Remplacez les valeurs ci-dessous par vos vraies clés
-phemex_api_key = "VOTRE_CLE_API_PHEMEX"
-phemex_api_secret = "VOTRE_SECRET_API_PHEMEX"
-phemex_client = PhemexAPI(phemex_api_key, phemex_api_secret)
-
-@app.route('/webhook', methods=['POST'])
-def webhook_receiver():
-    try:
-        data = request.json
-        if not data:
-            logging.error("Données de webhook manquantes.")
-            return jsonify({"status": "error", "message": "Données manquantes"}), 400
-
-        logging.info(f"Webhook reçu: {data}")
-
-        # Extrait l'action de TradingView
-        action = data.get('action')
-        symbol = data.get('symbol')
-        price = data.get('price')
-        volume = data.get('volume', 0.01)  # Définir un volume par défaut
-
-        if not action or not symbol or not price:
-            logging.error("Action, symbole ou prix manquant dans le payload.")
-            return jsonify({"status": "error", "message": "Payload incomplet"}), 400
-
-        # S'assurer que les valeurs sont numériques
+    def create_order(self, symbol, side, volume, price, order_type, product_type):
+        """
+        Crée un nouvel ordre sur Phemex.
+        
+        Paramètres:
+        - symbol (str): La paire de trading (ex: "BTCUSDT")
+        - side (str): "buy" ou "sell"
+        - volume (float): La quantité à trader
+        - price (float): Le prix de l'ordre
+        - order_type (str): "limit", "market", etc.
+        - product_type (str): "linear" ou "spot"
+        
+        Retourne la réponse de l'API de Phemex.
+        """
+        path = "/v1/api-trade/orders" # Remplacez par le bon chemin si nécessaire pour votre type d'ordre
+        client_order_id = str(uuid.uuid4())
+        
+        request_body = {
+            "symbol": symbol,
+            "side": side,
+            "volume": int(volume * 1e8),  # Phemex attend des valeurs entières pour le volume (basé sur 1e8)
+            "price": int(price * 1e8),    # Phemex attend des valeurs entières pour le prix (basé sur 1e8)
+            "type": order_type,
+            "clOrdID": client_order_id,
+            "product": product_type
+        }
+        
+        query_string = f"clOrdID={client_order_id}&symbol={symbol}"
+        
+        signature = self._generate_signature(path, query_string)
+        
+        headers = {
+            "x-phemex-request-body": json.dumps(request_body),
+            "x-phemex-request-signature": signature,
+            "x-phemex-request-expiry": str(int(time.time()) + 60),
+            "x-phemex-request-chain": "UNIX",
+            "Content-Type": "application/json"
+        }
+        
         try:
-            volume = float(volume)
-            price = float(price)
-        except (ValueError, TypeError):
-            logging.error(f"Erreur de conversion des données: volume={volume}, price={price}")
-            return jsonify({"status": "error", "message": "Volume ou prix invalide"}), 400
-
-        if action == "buy":
-            logging.info(f"Alerte d'achat reçue pour {symbol} à {price} avec un volume de {volume}.")
-            # Log de l'API Phemex avant l'appel
-            logging.info(f"Tentative de passage d'ordre d'achat sur Phemex pour {symbol}...")
-            # Remplacez "YOUR_PRODUCT_TYPE" par "linear", "spot", ou "contract"
-            order_result = phemex_client.create_order(symbol, 'buy', volume, price, 'limit', 'YOUR_PRODUCT_TYPE')
-            logging.info(f"Résultat de l'ordre d'achat: {order_result}")
-
-            if order_result and order_result.get('code') == 0:
-                logging.info(f"Ordre d'achat passé avec succès pour {symbol}!")
-                return jsonify({"status": "success", "message": "Ordre d'achat passé"}), 200
-            else:
-                logging.error(f"Échec du passage de l'ordre d'achat pour {symbol}. Réponse de l'API: {order_result}")
-                return jsonify({"status": "error", "message": "Échec de l'ordre d'achat"}), 500
-
-        elif action == "sell":
-            logging.info(f"Alerte de vente reçue pour {symbol} à {price} avec un volume de {volume}.")
-            logging.info(f"Tentative de passage d'ordre de vente sur Phemex pour {symbol}...")
-            # Remplacez "YOUR_PRODUCT_TYPE" par "linear", "spot", ou "contract"
-            order_result = phemex_client.create_order(symbol, 'sell', volume, price, 'limit', 'YOUR_PRODUCT_TYPE')
-            logging.info(f"Résultat de l'ordre de vente: {order_result}")
-
-            if order_result and order_result.get('code') == 0:
-                logging.info(f"Ordre de vente passé avec succès pour {symbol}!")
-                return jsonify({"status": "success", "message": "Ordre de vente passé"}), 200
-            else:
-                logging.error(f"Échec du passage de l'ordre de vente pour {symbol}. Réponse de l'API: {order_result}")
-                return jsonify({"status": "error", "message": "Échec de l'ordre de vente"}), 500
-
-        else:
-            logging.warning(f"Action non reconnue: {action}")
-            return jsonify({"status": "warning", "message": "Action non reconnue"}), 400
-
-    except Exception as e:
-        logging.critical(f"Erreur fatale dans le webhook: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": "Erreur interne"}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+            response = requests.post(f"{self.base_url}{path}", headers=headers, json=request_body)
+            response.raise_for_status() # Lève une exception si la réponse est une erreur HTTP
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Erreur lors de la création de l'ordre: {e}")
+            return None
