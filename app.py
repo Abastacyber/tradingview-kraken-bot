@@ -1,114 +1,83 @@
-import os, json, time
+import os, time, json, math
 from flask import Flask, request, jsonify
 import ccxt
 
-# --- Flask app que Gunicorn doit voir ---
-app = Flask(_name_)   # <-- IMPORTANT : la variable s'appelle bien "app"
+app = Flask(_name_)
 
-# --- ENV / Defaults ---
-BASE = os.getenv("BASE_SYMBOL", "BTC").upper()
-QUOTE = os.getenv("QUOTE_SYMBOL", "USDT").upper()
-SYMBOL = f"{BASE}/{QUOTE}"
+# ----- ENV -----
+API_KEY = os.getenv("PHEMEX_API_KEY", "")
+API_SECRET = os.getenv("PHEMEX_API_SECRET", "")
+BASE = os.getenv("BASE_SYMBOL", "BTC")
+QUOTE = os.getenv("QUOTE_SYMBOL", "USDT")
+SYMBOL = f"{BASE}/{QUOTE}"      # ccxt format
+EX_SYMBOL = f"{BASE}{QUOTE}"    # ex: BTCUSDT
+FIXED_QUOTE = float(os.getenv("FIXED_QUOTE_PER_TRADE", "25"))  # budget en USDT
+MIN_QUOTE = float(os.getenv("MIN_QUOTE_PER_TRADE", "10"))      # sécurité
 
-# sizing simple: montant fixe par trade en QUOTE (USDT)
-FIXED_QUOTE_PER_TRADE = float(os.getenv("FIXED_QUOTE_PER_TRADE", "25"))
-MIN_QUOTE_PER_TRADE   = float(os.getenv("MIN_QUOTE_PER_TRADE", "10"))
+# ----- Phemex via ccxt -----
+exchange = ccxt.phemex({
+    "apiKey": API_KEY,
+    "secret": API_SECRET,
+    "enableRateLimit": True,
+})
+exchange.options["defaultType"] = "spot"
 
-# clés Phemex
-PHEMEX_KEY    = os.getenv("PHEMEX_API_KEY", "")
-PHEMEX_SECRET = os.getenv("PHEMEX_API_SECRET", "")
+def _price():
+    t = exchange.fetch_ticker(SYMBOL)
+    return float(t["last"])
 
-# ccxt client Phemex Spot
-def make_client():
-    if not PHEMEX_KEY or not PHEMEX_SECRET:
-        raise RuntimeError("Phemex API key/secret manquants")
-    exchange = ccxt.phemex({
-        "apiKey": PHEMEX_KEY,
-        "secret": PHEMEX_SECRET,
-        "enableRateLimit": True,
-        "options": {
-            "defaultType": "spot",  # spot et non perp/futures
-        }
-    })
-    return exchange
+def _lot_size(amount):
+    # récupère le pas de taille si dispo (sinon arrondi à 6 déc.)
+    try:
+        exm = exchange.load_markets()
+        step = exm[SYMBOL]["limits"]["amount"]["min"] or 0.000001
+        # arrondi au pas
+        digits = max(0, -int(math.floor(math.log10(step))))
+        return float(f"{amount:.{min(digits,8)}f}")
+    except Exception:
+        return float(f"{amount:.6f}")
 
-@app.route("/")
-def index():
-    return "OK - TV → Phemex Spot webhook en ligne"
-
-@app.route("/health")
+@app.route("/health", methods=["GET","HEAD"])
 def health():
-    return jsonify({"status": "ok", "time": int(time.time())})
+    return jsonify({"status":"ok","time":int(time.time())})
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """
-    Payload attendu (exemples) :
-    - TradingView (message custom) => {"signal":"BUY","symbol":"BTCUSDT","timeframe":"5"}
-    - Test curl minimal           => {"signal":"BUY","quantity":0.001}
-    Champs utiles : signal (BUY/SELL), symbol (BTCUSDT facultatif), quantity (facultative en BASE),
-                    price (facultatif), tp_pct/sl_pct/trailing... ignorés côté exécution directe marché.
-    """
     try:
         data = request.get_json(force=True, silent=False)
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"JSON invalide: {e}"}), 400
+    except Exception:
+        return jsonify({"status":"error","message":"JSON invalide"}), 400
 
-    # sécurité : on logge "propre"
-    app.logger.info(f"Payload reçu: {json.dumps(data, ensure_ascii=False)}")
+    # lecture flexible du champ action
+    action = (data.get("action") or data.get("signal") or "").upper().strip()
+    symbol = (data.get("symbol") or EX_SYMBOL).upper().strip()
+    qty = data.get("quantity")  # optionnel (en BASE)
 
-    signal = str(data.get("signal", "")).upper()
-    if signal not in ("BUY", "SELL"):
-        return jsonify({"status": "error", "message": "Champ 'signal' manquant ou invalide (BUY/SELL)"}), 400
+    if symbol != EX_SYMBOL:
+        return jsonify({"status":"error","message":f"Symbole inattendu: {symbol}"}), 400
+    if action not in ("BUY","SELL"):
+        return jsonify({"status":"error","message":"Champ 'action'/'signal' requis (BUY/SELL)"}), 400
 
-    # symbole : accepte "BTCUSDT" ou on retombe sur env SYMBOL
-    symbol_raw = str(data.get("symbol", "")).upper().replace("-", "").replace("/", "")
-    symbol = SYMBOL if not symbol_raw else f"{symbol_raw[:-4]}/{symbol_raw[-4:]}" if symbol_raw.endswith("USDT") else SYMBOL
+    # calcule quantité si absente
+    if qty is None:
+        px = _price()
+        quote_to_use = max(MIN_QUOTE, FIXED_QUOTE)
+        qty = _lot_size(quote_to_use / px)
 
-    # quantité : soit fournie en BASE, soit on calcule depuis FIXED_QUOTE_PER_TRADE
-    qty_base = data.get("quantity")
+    # safety
+    if qty <= 0:
+        return jsonify({"status":"error","message":"Quantité <= 0"}), 400
+
+    app.logger.info(f"Ordre {action} {qty} {BASE} sur {EX_SYMBOL}")
+
+    # place ordre au marché
     try:
-        client = make_client()
-        market = client.market(symbol)  # charge métadonnées (précisions, min)
-        client.load_markets()
+        if action == "BUY":
+            order = exchange.create_market_buy_order(SYMBOL, qty)
+        else:
+            order = exchange.create_market_sell_order(SYMBOL, qty)
+    except ccxt.BaseError as e:
+        app.logger.exception("Erreur ccxt")
+        return jsonify({"status":"error","message":str(e)}), 502
 
-        if qty_base is None:
-            # calcul depuis quote fixe (USDT)
-            ticker = client.fetch_ticker(symbol)
-            last = float(ticker["last"])
-            quote_amt = max(FIXED_QUOTE_PER_TRADE, MIN_QUOTE_PER_TRADE)
-            qty_base = quote_amt / last
-
-        qty_base = float(qty_base)
-        if qty_base <= 0:
-            return jsonify({"status": "error", "message": "Quantité <= 0"}), 400
-
-        # normalise quantité selon stepSize
-        amount = client.amount_to_precision(symbol, qty_base)
-
-        side = "buy" if signal == "BUY" else "sell"
-        order = client.create_order(symbol=symbol, type="market", side=side, amount=amount)
-
-        app.logger.info(f"Ordre Phemex OK: {order}")
-        return jsonify({
-            "status": "success",
-            "exchange": "phemex-spot",
-            "symbol": symbol,
-            "side": side.upper(),
-            "amount": amount,
-            "order_id": order.get("id")
-        })
-
-    except ccxt.InsufficientFunds as e:
-        return jsonify({"status": "error", "message": f"Fonds insuffisants: {e}"}), 400
-    except ccxt.InvalidOrder as e:
-        return jsonify({"status": "error", "message": f"Ordre invalide: {e}"}), 400
-    except ccxt.ExchangeError as e:
-        return jsonify({"status": "error", "message": f"Erreur bourse: {e}"}), 502
-    except Exception as e:
-        app.logger.exception("Erreur serveur")
-        return jsonify({"status": "error", "message": f"Erreur serveur: {e}"}), 500
-
-if _name_ == "_main_":
-    # pour exécution locale éventuelle
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+    return jsonify({"status":"ok","order":order})
