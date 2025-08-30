@@ -167,6 +167,6 @@ def webhook():
         return jsonify({"status": "error", "message": f"Erreur serveur: {str(e)}"}), 500
 
 # --------------- LANCEUR LOCAL (facultatif) ---------------
-if _name_ == "_main_":
+if __name__ == "__main__":
     # Render utilise gunicorn ; ce bloc ne sert que pour tests en local
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
