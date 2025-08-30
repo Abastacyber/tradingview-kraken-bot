@@ -2,7 +2,7 @@ import os, time, json, math
 from flask import Flask, request, jsonify
 import ccxt
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # ----- ENV -----
 API_KEY = os.getenv("PHEMEX_API_KEY", "")
