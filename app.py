@@ -100,4 +100,4 @@ def webhook():
 
 # Lanceur local (Render utilisera gunicorn)
 if _name_ == "_main_":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+app.run(host='0.0.0.0', port=int(os.getenv("PORT", "8080")))
