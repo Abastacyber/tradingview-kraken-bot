@@ -12,7 +12,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("tv-phemex")
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # ========= Env vars attendues =========
 EXCHANGE_NAME           = os.getenv("EXCHANGE", "phemex").lower()     # "phemex"
@@ -164,7 +164,7 @@ def webhook():
         return jsonify({"error": str(e)}), 500
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     # Pour un run local éventuel (Render utilisera gunicorn)
     port = int(os.getenv("PORT", "3000"))
     app.run(host="0.0.0.0", port=port)
