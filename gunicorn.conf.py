@@ -1,5 +1,7 @@
 # gunicorn.conf.py
+workers = 1
+threads = 2
+timeout = 60
 accesslog = "-"
-errorlog  = "-"
-loglevel  = "info"
-# (pas de access_log_format pour l'instant)
+errorlog = "-"
+loglevel = "info"
