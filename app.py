@@ -1,170 +1,214 @@
-# app.py
 import os
 import json
+import math
 import logging
-from decimal import Decimal, ROUND_DOWN
+from typing import Any, Dict, Tuple
 
 from flask import Flask, request, jsonify
+
+# ccxt pour l'exchange
 import ccxt
 
-# ========= Config & logs =========
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# ========= Helpers ENV =========
+def env_str(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    return v if v not in (None, "") else default
+
+def env_float(name: str, default: float = 0.0) -> float:
+    try:
+        return float(env_str(name, str(default)))
+    except Exception:
+        return float(default)
+
+def env_int(name: str, default: int = 0) -> int:
+    try:
+        return int(float(env_str(name, str(default))))
+    except Exception:
+        return int(default)
+
+# ========= Lecture ENV (défauts sûrs) =========
+LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
+EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()   # "phemex"
+BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC")           # "BTC"
+QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT")         # "USDT"
+SYMBOL                 = env_str("SYMBOL", "BTCUSDT")            # "BTCUSDT"
+
+ORDER_TYPE             = env_str("ORDER_TYPE", "market")         # "market" (géré ici)
+SIZE_MODE              = env_str("SIZE_MODE", "fixed_eur")       # informatif
+FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 15)  # Montant en QUOTE (ex: 15 USDT)
+FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)      # 0.2% par défaut
+MIN_EUR_PER_TRADE      = env_float("MIN_EUR_PER_TRADE", 10)      # garde-fou (non bloquant)
+BTC_RESERVE            = env_float("BTC_RESERVE", 0.00005)       # réserve base pour éviter sold-out
+
+PHEMEX_API_KEY         = env_str("PHEMEX_API_KEY")
+PHEMEX_API_SECRET      = env_str("PHEMEX_API_SECRET")
+
+# ========= Logs =========
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("tv-phemex")
 
-app = Flask(__name__)
+# ========= Flask =========
+app = Flask(_name_)
 
-# ========= Env vars attendues =========
-EXCHANGE_NAME           = os.getenv("EXCHANGE", "phemex").lower()     # "phemex"
-PHEMEX_API_KEY          = os.getenv("PHEMEX_API_KEY", "")
-PHEMEX_API_SECRET       = os.getenv("PHEMEX_API_SECRET", "")
-BASE_SYMBOL             = os.getenv("BASE_SYMBOL", "BTC")              # "BTC"
-QUOTE_SYMBOL            = os.getenv("QUOTE_SYMBOL", "USDT")            # "USDT"
-SYMBOL_ENV              = os.getenv("SYMBOL", f"{BASE_SYMBOL}{QUOTE_SYMBOL}")  # "BTCUSDT"
-ORDER_TYPE              = os.getenv("ORDER_TYPE", "market").lower()    # "market"
-SIZE_MODE               = os.getenv("SIZE_MODE", "fixed_eur")          # "fixed_eur"
-FIXED_QUOTE_PER_TRADE   = Decimal(os.getenv("FIXED_QUOTE_PER_TRADE", "15"))
-MIN_EUR_PER_TRADE       = Decimal(os.getenv("MIN_EUR_PER_TRADE", "10"))
-FEE_BUFFER_PCT          = Decimal(os.getenv("FEE_BUFFER_PCT", "0.002"))  # 0.2%
-PAPER_MODE              = int(os.getenv("PAPER_MODE", "0"))            # 1 = pas d'envoi d'ordres
-
-# ccxt veut "BTC/USDT"
-def to_ccxt_symbol(sym: str) -> str:
-    s = sym.replace(":", "").replace("-", "").upper()
-    if "/" in s:
-        return s
-    # ex: BTCUSDT -> BTC/USDT
-    if s.endswith(QUOTE_SYMBOL.upper()):
-        return f"{BASE_SYMBOL.upper()}/{QUOTE_SYMBOL.upper()}"
-    # fallback
-    return f"{BASE_SYMBOL.upper()}/{QUOTE_SYMBOL.upper()}"
-
-CCXT_SYMBOL = to_ccxt_symbol(SYMBOL_ENV)
-
-# ========= Exchange =========
-def make_exchange():
+# ========= Exchange (ccxt) =========
+def _make_exchange():
+    # Phemex en spot
     if EXCHANGE_NAME != "phemex":
-        raise RuntimeError("Pour l’instant seul Phemex est supporté (EXCHANGE=phemex).")
-    conf = {"enableRateLimit": True}
-    if not PAPER_MODE:
-        conf.update({"apiKey": PHEMEX_API_KEY, "secret": PHEMEX_API_SECRET})
-    return ccxt.phemex(conf)
+        raise RuntimeError(f"Exchange non supporté ici: {EXCHANGE_NAME}")
+    if not PHEMEX_API_KEY or not PHEMEX_API_SECRET:
+        raise RuntimeError("PHEMEX_API_KEY/SECRET manquants")
 
-exchange = make_exchange()
+    ex = ccxt.phemex({
+        "apiKey": PHEMEX_API_KEY,
+        "secret": PHEMEX_API_SECRET,
+        "options": {
+            "defaultType": "spot",
+        },
+        "enableRateLimit": True,
+    })
+    return ex
 
-# ========= Utils =========
-def quantize_amount(amount: Decimal, step: Decimal) -> Decimal:
+def _round_to_step(value: float, step: float) -> float:
+    if step is None or step == 0:
+        return value
+    return math.floor(value / step) * step
+
+def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[float, float, Dict[str, Any]]:
     """
-    Tronque amount au pas 'step' (ex: 0.0001) pour matcher le lot minimum.
+    Retourne (base_qty_arrondie, price, market) pour convertir un montant QUOTE -> BASE.
+    Applique FEE_BUFFER_PCT sur la base (sécurité).
+    Respecte minCost/minAmount/steps.
     """
-    if step <= 0:
-        return amount
-    # nombre de décimales du step
-    q = Decimal(str(step)).normalize()
-    decimals = abs(q.as_tuple().exponent)
-    return amount.quantize(Decimal(10) ** -decimals, rounding=ROUND_DOWN)
+    markets = ex.load_markets()
+    if symbol not in markets:
+        raise RuntimeError(f"Symbole inconnu côté exchange: {symbol}")
+    market = markets[symbol]
 
-def get_price(symbol: str) -> Decimal:
-    ticker = exchange.fetch_ticker(symbol)
-    # mid price: (bid+ask)/2 si possibles, sinon last
-    bid = Decimal(str(ticker.get("bid") or 0))
-    ask = Decimal(str(ticker.get("ask") or 0))
-    last = Decimal(str(ticker.get("last") or 0))
-    if bid > 0 and ask > 0:
-        return (bid + ask) / Decimal("2")
-    return last if last > 0 else Decimal("0")
+    # prix moyen
+    ticker = ex.fetch_ticker(symbol)
+    price = float(ticker["last"] or ticker["close"] or ticker["ask"] or ticker["bid"])
 
-def compute_amount_eur_fixed(symbol: str, eur_size: Decimal) -> Decimal:
-    price = get_price(symbol)
-    if price <= 0:
-        raise RuntimeError("Impossible de récupérer le prix.")
-    # sur une paire USDT, on assimile 1 USDT ≈ 1 EUR (tu finances en EUR mais trades en USDT côté exchange)
-    # donc 'eur_size' agit comme taille en quote (USDT).
-    amount = eur_size / price                           # quantité de base (ex: en BTC)
-    amount *= (Decimal("1") - FEE_BUFFER_PCT)           # buffer frais
-    # adapter au lot min
-    market = exchange.market(symbol)
-    step = Decimal(str(market.get("limits", {}).get("amount", {}).get("min", 0))) or Decimal("0")
-    # si min non fourni, tente precision
-    if step == 0:
-        precision = market.get("precision", {}).get("amount")
-        step = Decimal(str(10 ** -(precision))) if precision is not None else Decimal("0.00000001")
-    return quantize_amount(amount, step)
+    # conversion QUOTE -> BASE
+    base_qty = quote_amt / price
+    base_qty *= (1.0 - FEE_BUFFER_PCT)
 
-def place_order(signal: str) -> dict:
-    symbol = CCXT_SYMBOL
+    # contraintes exchange
+    min_amount = float((market.get("limits", {}).get("amount", {}) or {}).get("min") or 0.0)
+    min_cost   = float((market.get("limits", {}).get("cost", {}) or {}).get("min") or 0.0)
 
-    # taille
-    if SIZE_MODE == "fixed_eur":
-        notional = FIXED_QUOTE_PER_TRADE
-        if notional < MIN_EUR_PER_TRADE:
-            raise RuntimeError(f"FIXED_QUOTE_PER_TRADE ({notional}€) < MIN_EUR_PER_TRADE ({MIN_EUR_PER_TRADE}€).")
-        amount = compute_amount_eur_fixed(symbol, notional)
-    else:
-        raise RuntimeError(f"SIZE_MODE non supporté: {SIZE_MODE}")
+    # steps (quantize)
+    amount_step = None
+    if "precision" in market and market["precision"].get("amount"):
+        # ccxt: precision = nb décimales -> on arrondit ensuite via step approximatif
+        decimals = int(market["precision"]["amount"])
+        amount_step = 10 ** (-decimals)
+    elif "info" in market and "lotSz" in market["info"]:
+        # parfois Phemex expose lot size
+        try:
+            amount_step = float(market["info"]["lotSz"])
+        except Exception:
+            amount_step = None
 
-    if amount <= 0:
-        raise RuntimeError("Quantité calculée nulle.")
+    if min_cost and (base_qty * price) < min_cost:
+        # augmente pour respecter min cost
+        base_qty = min_cost / price
 
-    log.info(f"Signal={signal} | Symbol={symbol} | Amount={amount}")
+    if min_amount and base_qty < min_amount:
+        base_qty = min_amount
 
-    if PAPER_MODE:
-        return {
-            "paper": True,
-            "signal": signal,
-            "symbol": symbol,
-            "amount": float(amount),
-        }
+    if amount_step:
+        base_qty = _round_to_step(base_qty, amount_step)
 
-    # Exécution
-    if ORDER_TYPE != "market":
-        raise RuntimeError("Seul ORDER_TYPE=market est géré ici.")
-    if signal == "BUY":
-        return exchange.create_market_buy_order(symbol, float(amount))
-    elif signal == "SELL":
-        return exchange.create_market_sell_order(symbol, float(amount))
-    else:
-        raise RuntimeError("Signal inconnu (attendu: BUY ou SELL).")
+    return base_qty, price, market
 
 # ========= Routes =========
 @app.get("/health")
 def health():
-    return {"status": "ok", "exchange": EXCHANGE_NAME, "symbol": CCXT_SYMBOL}
+    return jsonify({"status": "ok"}), 200
 
 @app.post("/webhook")
 def webhook():
     """
-    Payload TradingView attendu, par ex. :
-    {
-      "signal": "BUY",               # ou "SELL"
-      "symbol": "BTCUSDT"            # optionnel, on utilisera sinon ENV SYMBOL
-    }
+    Payload TradingView attendu (exemples simples) :
+    - {"signal":"BUY"}  -> achète pour FIXED_QUOTE_PER_TRADE (en QUOTE, ex: 15 USDT)
+    - {"signal":"SELL"} -> vend l'équivalent FIXED_QUOTE_PER_TRADE (ou au max dispo - réserve)
+    Optionnel :
+    - {"signal":"BUY","quote":25}  # override du montant QUOTE à utiliser
+    - {"signal":"SELL","qty_base":0.001}  # override quantité base à vendre
     """
     try:
-        data = request.get_json(force=True, silent=True) or {}
-        signal = str(data.get("signal", "")).upper().strip()
-        if not signal:
-            return jsonify({"error": "champ 'signal' requis (BUY|SELL)"}), 400
+        payload = request.get_json(silent=True) or {}
+        log.info("Webhook payload: %s", json.dumps(payload, ensure_ascii=False))
 
-        # (optionnel) si TV envoie un symbole différent, on l’accepte:
-        sym_in = data.get("symbol")
-        if sym_in:
-            global CCXT_SYMBOL
-            CCXT_SYMBOL = to_ccxt_symbol(sym_in)
+        signal = (payload.get("signal") or "").upper()
+        if signal not in {"BUY", "SELL"}:
+            return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
 
-        order = place_order(signal)
-        return jsonify(order), 200
+        quote_to_use = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
+        if quote_to_use < MIN_EUR_PER_TRADE:
+            log.warning("Montant quote %s < MIN_EUR_PER_TRADE %s", quote_to_use, MIN_EUR_PER_TRADE)
 
+        ex = _make_exchange()
+
+        # --- BUY ---
+        if signal == "BUY":
+            base_qty, price, market = _compute_base_qty_for_quote(ex, SYMBOL, quote_to_use)
+
+            # sécurité : si qty très petite
+            if base_qty <= 0:
+                return jsonify({"error": "qty base <= 0 après calcul"}), 400
+
+            log.info("BUY %s @~%.8f %s (base_qty=%s)", SYMBOL, price, QUOTE_SYMBOL, base_qty)
+
+            if ORDER_TYPE != "market":
+                return jsonify({"error": "Cette version ne gère que market"}), 400
+
+            order = ex.create_market_buy_order(SYMBOL, base_qty)
+            log.info("BUY filled: %s", json.dumps(order, default=str))
+            return jsonify({"ok": True, "order": order}), 200
+
+        # --- SELL ---
+        else:
+            # quantité souhaitée override ?
+            qty_override = payload.get("qty_base")
+            if qty_override is not None:
+                try:
+                    base_qty = float(qty_override)
+                except Exception:
+                    return jsonify({"error": "qty_base invalide"}), 400
+            else:
+                # calcule base à partir d'un montant en QUOTE (même logique que BUY)
+                base_qty, price, _ = _compute_base_qty_for_quote(ex, SYMBOL, quote_to_use)
+
+            # ne pas dépasser le disponible (et laisser une réserve)
+            balances = ex.fetch_free_balance()
+            avail_base = float(balances.get(BASE_SYMBOL, 0.0))
+            sellable = max(0.0, avail_base - BTC_RESERVE)
+            base_qty = min(base_qty, sellable)
+
+            if base_qty <= 0:
+                return jsonify({"error": "Pas de quantité base vendable (réserve incluse)"}), 400
+
+            log.info("SELL %s qty=%s (reserve=%s, avail=%s)", SYMBOL, base_qty, BTC_RESERVE, avail_base)
+
+            if ORDER_TYPE != "market":
+                return jsonify({"error": "Cette version ne gère que market"}), 400
+
+            order = ex.create_market_sell_order(SYMBOL, base_qty)
+            log.info("SELL filled: %s", json.dumps(order, default=str))
+            return jsonify({"ok": True, "order": order}), 200
+
+    except ccxt.InsufficientFunds as e:
+        log.warning("Fonds insuffisants: %s", str(e))
+        return jsonify({"error": "InsufficientFunds", "detail": str(e)}), 400
     except ccxt.BaseError as e:
-        # Erreurs ccxt lisibles (fonds insuffisants, etc.)
-        log.exception("ccxt error")
-        return jsonify({"error": str(e)}), 400
+        log.exception("Erreur exchange/ccxt")
+        return jsonify({"error": "ExchangeError", "detail": str(e)}), 502
     except Exception as e:
-        log.exception("webhook error")
+        log.exception("Erreur serveur")
         return jsonify({"error": str(e)}), 500
 
 
-if __name__ == "__main__":
-    # Pour un run local éventuel (Render utilisera gunicorn)
+if _name_ == "_main_":
     port = int(os.getenv("PORT", "3000"))
     app.run(host="0.0.0.0", port=port)
