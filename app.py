@@ -1,6 +1,8 @@
 import os
 import json
 import math
+import time
+import threading
 import logging
 from functools import lru_cache
 from typing import Any, Dict, Tuple
@@ -25,7 +27,7 @@ def env_int(name: str, default: int = 0) -> int:
     except Exception:
         return int(default)
 
-# ========= Lecture ENV =========
+# ========= ENV =========
 LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
 EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()
 BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC").upper()
@@ -34,14 +36,21 @@ SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"
 
 ORDER_TYPE             = env_str("ORDER_TYPE", "market").lower()
 FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 30.0)
-FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)
+FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)     # 0.2%
 MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)
 
-BASE_RESERVE           = env_float("BASE_RESERVE", 0.00005)    # réserve BTC
-QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 10.0)      # réserve USDT (NOUVEAU)
+BASE_RESERVE           = env_float("BASE_RESERVE", 0.00005)     # réserve BTC
+QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 10.0)       # réserve USDT
 
 WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "")
 DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1","true","yes")
+
+# Trailing (côté bot)
+TRAILING_ENABLED           = env_str("TRAILING_ENABLED", "false").lower() in ("1","true","yes")
+TRAIL_ACTIVATE_PCT_CONF2   = env_float("TRAIL_ACTIVATE_PCT_CONF2", 0.003)   # +0.30%
+TRAIL_GAP_CONF2            = env_float("TRAIL_GAP_CONF2",         0.0025)   # 0.25%
+TRAIL_ACTIVATE_PCT_CONF3   = env_float("TRAIL_ACTIVATE_PCT_CONF3", 0.005)   # +0.50%
+TRAIL_GAP_CONF3            = env_float("TRAIL_GAP_CONF3",         0.0035)   # 0.35%
 
 API_KEY                = env_str("PHEMEX_API_KEY")
 API_SECRET             = env_str("PHEMEX_API_SECRET")
@@ -53,7 +62,7 @@ log = logging.getLogger("tv-phemex")
 # ========= Flask =========
 app = Flask(__name__)
 
-# ========= Exchange/ccxt =========
+# ========= Exchange =========
 def _assert_env():
     if EXCHANGE_NAME != "phemex":
         raise RuntimeError(f"Exchange non supporté: {EXCHANGE_NAME}")
@@ -67,7 +76,7 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
     if "/" in s:
         base, quote = s.split("/", 1)
         return f"{base}/{quote}"
-    for q in ("USDT","USD","USDC","EUR","BTC","ETH"):
+    for q in ("USDT", "USD", "USDC", "EUR", "BTC", "ETH"):
         if s.endswith(q):
             base = s[:-len(q)]
             return f"{base}/{q}"
@@ -118,7 +127,6 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     if price <= 0:
         raise RuntimeError("Prix invalide")
 
-    # quantité brute
     base_qty_raw = (quote_amt / price) * (1.0 - FEE_BUFFER_PCT)
 
     limits = market.get("limits") or {}
@@ -126,20 +134,14 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     min_cost   = float((limits.get("cost")   or {}).get("min") or 0.0)
     step       = _amount_step_from_market(market)
 
-    # aligne sur min_cost si nécessaire
     base_qty = base_qty_raw
     if min_cost and (base_qty * price) < min_cost:
         base_qty = min_cost / price
-
-    # aligne sur min_amount si nécessaire
     if min_amount and base_qty < min_amount:
         base_qty = min_amount
-
-    # arrondi au pas
     if step:
         base_qty = _round_to_step(base_qty, step)
 
-    # filet: si toujours trop petit vs lot minimal → calcule le quote min requis
     minimal_lot = max(step or 0.0, min_amount or 0.0)
     if minimal_lot and base_qty < minimal_lot:
         required_quote = (minimal_lot * price) * (1.0 + FEE_BUFFER_PCT)
@@ -147,17 +149,63 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
             f"Montant trop faible pour le lot minimal: lot_min={minimal_lot} {symbol.split('/')[0]} "
             f"(≈ {required_quote:.2f} {symbol.split('/')[1]} requis)"
         )
-
     return base_qty, price, market
 
 def _tp_sl_from_confidence(conf: int) -> Tuple[float, float]:
-    """
-    Retourne (tp_pct, sl_pct) en pourcentage décimal.
-    confidence=2 -> prudent ; confidence>=3 -> ambitieux.
-    """
+    # retourne (tp_pct, sl_pct)
     if conf >= 3:
         return (0.008, 0.005)   # +0.8% / -0.5%
     return (0.003, 0.002)       # +0.3% / -0.2%
+
+def _trail_params(conf:int)->Tuple[float,float]:
+    # retourne (activate_pct, gap)
+    if conf >= 3:
+        return (TRAIL_ACTIVATE_PCT_CONF3, TRAIL_GAP_CONF3)
+    return (TRAIL_ACTIVATE_PCT_CONF2, TRAIL_GAP_CONF2)
+
+# ========= Trailing monitor (côté bot) =========
+def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float,
+                      conf: int, base_sl_pct: float):
+    """Thread de suivi : active un trailing après un certain gain et vend au marché si le stop est touché."""
+    if not TRAILING_ENABLED or side != "BUY" or qty <= 0:
+        return
+    activate_pct, gap = _trail_params(conf)
+    max_price = entry_price
+    trail_stop = entry_price * (1.0 - base_sl_pct)
+    activated = False
+
+    log.info("[TRAIL] start %s qty=%.8f entry=%.2f conf=%s baseSL=%.4f",
+             symbol, qty, entry_price, conf, base_sl_pct)
+
+    while True:
+        try:
+            t = ex.fetch_ticker(symbol)
+            last = float(t.get("last") or t.get("close") or 0)
+            if last <= 0:
+                time.sleep(3); continue
+
+            if not activated and last >= entry_price * (1.0 + activate_pct):
+                activated = True
+                log.info("[TRAIL] activated at %.2f (>= %.2f)", last, entry_price*(1+activate_pct))
+
+            if activated:
+                if last > max_price:
+                    max_price = last
+                    trail_stop = max(trail_stop, max_price * (1.0 - gap))
+
+            if last <= trail_stop:
+                log.info("[TRAIL] stop hit %.2f <= %.2f -> SELL market", last, trail_stop)
+                if not DRY_RUN:
+                    try:
+                        ex.create_market_sell_order(symbol, qty)
+                    except Exception as e:
+                        log.warning("[TRAIL] SELL failed: %s", e)
+                break
+
+            time.sleep(3)
+        except Exception as e:
+            log.warning("[TRAIL] error: %s", e)
+            time.sleep(3)
 
 # ========= Routes =========
 @app.get("/")
@@ -171,7 +219,6 @@ def health():
 @app.post("/webhook")
 def webhook():
     try:
-        # Auth simple optionnelle
         if WEBHOOK_TOKEN:
             given = (request.headers.get("X-Webhook-Token")
                      or request.args.get("token")
@@ -186,7 +233,6 @@ def webhook():
         if signal not in {"BUY", "SELL"}:
             return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
 
-        # symbol & confiance
         symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or SYMBOL_DEFAULT)
         conf   = int(payload.get("confidence") or payload.get("indicators_count") or 2)
         tp_pct, sl_pct = _tp_sl_from_confidence(conf)
@@ -194,14 +240,13 @@ def webhook():
         ex = _make_exchange()
 
         if signal == "BUY":
-            # quote demandée – réserve USDT
             requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
             if requested_quote < MIN_QUOTE_PER_TRADE:
                 log.warning("Montant QUOTE %s < MIN_QUOTE_PER_TRADE %s", requested_quote, MIN_QUOTE_PER_TRADE)
 
-            # vérifie dispo USDT et applique QUOTE_RESERVE
-            free = ex.fetch_free_balance()
-            avail_quote = float(free.get(QUOTE_SYMBOL, 0.0))
+            # réserve USDT
+            balances = ex.fetch_free_balance()
+            avail_quote = float(balances.get(QUOTE_SYMBOL, 0.0))
             usable_quote = max(0.0, avail_quote - QUOTE_RESERVE)
             quote_to_use = min(requested_quote, usable_quote)
 
@@ -211,7 +256,7 @@ def webhook():
 
             # sizing
             try:
-                base_qty, price, market = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
+                base_qty, price, _ = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
             except Exception as e:
                 log.warning("Sizing error: %s", e)
                 return jsonify({"error": "sizing_error", "detail": str(e),
@@ -220,20 +265,39 @@ def webhook():
             if ORDER_TYPE != "market":
                 return jsonify({"error": "Cette version ne gère que les ordres market"}), 400
 
-            log.info("BUY %s quote=%.4f -> qty=%.8f (price~%.2f) | reserves: QUOTE=%s, BASE=%s",
+            log.info("BUY %s quote=%.4f -> qty=%.8f (price~%.2f) | reserves QUOTE=%.2f, BASE=%.8f",
                      symbol, quote_to_use, base_qty, price, QUOTE_RESERVE, BASE_RESERVE)
 
             if DRY_RUN:
                 return jsonify({"ok": True, "dry_run": True, "action": "BUY",
                                 "symbol": symbol, "qty": base_qty, "price": price,
-                                "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
+                                "tp_pct": tp_pct, "sl_pct": sl_pct,
+                                "confidence": conf, "trailing_enabled": TRAILING_ENABLED}), 200
 
             order = ex.create_market_buy_order(symbol, base_qty)
-            return jsonify({"ok": True, "order": order,
-                            "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
 
-        # SELL
-        # quantité override ?
+            # prix moyen rempli (fallback ticker)
+            try:
+                fill_price = float(order.get("average") or order.get("price") or 0.0)
+            except Exception:
+                fill_price = 0.0
+            if not fill_price:
+                t = ex.fetch_ticker(symbol)
+                fill_price = float(t.get("last") or t.get("close") or 0.0)
+
+            # trailing (thread)
+            if TRAILING_ENABLED:
+                threading.Thread(
+                    target=_monitor_trailing,
+                    args=(ex, symbol, "BUY", base_qty, fill_price, conf, sl_pct),
+                    daemon=True
+                ).start()
+
+            return jsonify({"ok": True, "order": order,
+                            "tp_pct": tp_pct, "sl_pct": sl_pct,
+                            "confidence": conf, "trailing_enabled": TRAILING_ENABLED}), 200
+
+        # -------- SELL --------
         qty_override = payload.get("qty_base")
         if qty_override is not None:
             try:
@@ -241,7 +305,6 @@ def webhook():
             except Exception:
                 return jsonify({"error": "qty_base invalide"}), 400
         else:
-            # calcule depuis un montant quote (rare en SELL, mais possible)
             requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
             try:
                 base_qty, price, _ = _compute_base_qty_for_quote(ex, symbol, requested_quote)
@@ -249,7 +312,6 @@ def webhook():
                 log.warning("Sizing error SELL: %s", e)
                 return jsonify({"error": "sizing_error", "detail": str(e)}), 400
 
-        # ne pas dépasser le disponible (laisse BASE_RESERVE)
         balances = ex.fetch_free_balance()
         base_code = symbol.split("/")[0]
         avail_base = float(balances.get(base_code, 0.0))
