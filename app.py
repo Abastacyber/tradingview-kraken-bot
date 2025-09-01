@@ -35,10 +35,10 @@ SYMBOL                 = env_str("SYMBOL", "BTCUSDT")            # "BTCUSDT"
 
 ORDER_TYPE             = env_str("ORDER_TYPE", "market")         # "market" (géré ici)
 SIZE_MODE              = env_str("SIZE_MODE", "fixed_eur")       # informatif
-FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 15)  # Montant en QUOTE (ex: 15 USDT)
-FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)      # 0.2% par défaut
-MIN_EUR_PER_TRADE      = env_float("MIN_EUR_PER_TRADE", 10)      # garde-fou (non bloquant)
-BTC_RESERVE            = env_float("BTC_RESERVE", 0.00005)       # réserve base pour éviter sold-out
+FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 15)  # Montant en QUOTE (ex: 15 USDT)
+FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)      # 0,2 % par défaut
+MIN_EUR_PER_TRADE      = env_float("MIN_EUR_PER_TRADE", 10)      # garde‑fou non bloquant
+BTC_RESERVE            = env_float("BTC_RESERVE", 0.00005)       # réserve base pour éviter le sold‑out
 
 PHEMEX_API_KEY         = env_str("PHEMEX_API_KEY")
 PHEMEX_API_SECRET      = env_str("PHEMEX_API_SECRET")
@@ -48,7 +48,7 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("tv-phemex")
 
 # ========= Flask =========
-app = Flask(_name_)
+app = Flask(__name__)
 
 # ========= Exchange (ccxt) =========
 def _make_exchange():
@@ -130,11 +130,11 @@ def health():
 def webhook():
     """
     Payload TradingView attendu (exemples simples) :
-    - {"signal":"BUY"}  -> achète pour FIXED_QUOTE_PER_TRADE (en QUOTE, ex: 15 USDT)
-    - {"signal":"SELL"} -> vend l'équivalent FIXED_QUOTE_PER_TRADE (ou au max dispo - réserve)
-    Optionnel :
-    - {"signal":"BUY","quote":25}  # override du montant QUOTE à utiliser
-    - {"signal":"SELL","qty_base":0.001}  # override quantité base à vendre
+      - {"signal":"BUY"}  -> achète pour FIXED_QUOTE_PER_TRADE (en QUOTE, ex : 15 USDT)
+      - {"signal":"SELL"} -> vend l’équivalent FIXED_QUOTE_PER_TRADE (ou au max dispo moins la réserve)
+      Options :
+      - {"signal":"BUY","quote":25}     # override du montant QUOTE à utiliser
+      - {"signal":"SELL","qty_base":0.001}  # override de la quantité base à vendre
     """
     try:
         payload = request.get_json(silent=True) or {}
@@ -208,7 +208,6 @@ def webhook():
         log.exception("Erreur serveur")
         return jsonify({"error": str(e)}), 500
 
-
-if _name_ == "_main_":
+if __name__ == "__main__":
     port = int(os.getenv("PORT", "3000"))
     app.run(host="0.0.0.0", port=port)
