@@ -27,20 +27,21 @@ def env_int(name: str, default: int = 0) -> int:
 
 # ========= Lecture ENV =========
 LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
-EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()       # "phemex"
-BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC").upper()       # "BTC"
-QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT").upper()     # "USDT"
-SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"             # format ccxt
+EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()
+BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC").upper()
+QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT").upper()
+SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"
 
-ORDER_TYPE             = env_str("ORDER_TYPE", "market").lower()     # uniquement market ici
-SIZE_MODE              = env_str("SIZE_MODE", "fixed_quote")
-FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 15.0)    # en QUOTE
-FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)          # 0.2%
-MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)      # garde-fou
-BASE_RESERVE           = env_float("BTC_RESERVE", 0.00005)           # réserve en BASE
+ORDER_TYPE             = env_str("ORDER_TYPE", "market").lower()
+FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 30.0)
+FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)
+MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)
 
-WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "")                # optionnel (X-Webhook-Token)
-DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
+BASE_RESERVE           = env_float("BASE_RESERVE", 0.00005)    # réserve BTC
+QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 10.0)      # réserve USDT (NOUVEAU)
+
+WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "")
+DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1","true","yes")
 
 API_KEY                = env_str("PHEMEX_API_KEY")
 API_SECRET             = env_str("PHEMEX_API_SECRET")
@@ -52,24 +53,21 @@ log = logging.getLogger("tv-phemex")
 # ========= Flask =========
 app = Flask(__name__)
 
-# ========= Exchange (ccxt) =========
+# ========= Exchange/ccxt =========
 def _assert_env():
     if EXCHANGE_NAME != "phemex":
-        raise RuntimeError(f"Exchange non supporté ici: {EXCHANGE_NAME}")
+        raise RuntimeError(f"Exchange non supporté: {EXCHANGE_NAME}")
     if not API_KEY or not API_SECRET:
         raise RuntimeError("PHEMEX_API_KEY/SECRET manquants")
 
 def _normalize_to_ccxt_symbol(s: str) -> str:
-    """
-    Normalise 'BTCUSDT', 'BTC-USD', 'BTC/USD' -> 'BTC/USDT'
-    """
     if not s:
         return SYMBOL_DEFAULT
     s = s.replace("-", "/").upper()
     if "/" in s:
         base, quote = s.split("/", 1)
         return f"{base}/{quote}"
-    for q in ("USDT", "USD", "USDC", "EUR", "BTC", "ETH"):
+    for q in ("USDT","USD","USDC","EUR","BTC","ETH"):
         if s.endswith(q):
             base = s[:-len(q)]
             return f"{base}/{q}"
@@ -77,13 +75,12 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
 
 def _make_exchange():
     _assert_env()
-    ex = ccxt.phemex({
+    return ccxt.phemex({
         "apiKey": API_KEY,
         "secret": API_SECRET,
         "options": {"defaultType": "spot"},
         "enableRateLimit": True,
     })
-    return ex
 
 @lru_cache(maxsize=1)
 def _load_markets(ex):
@@ -121,22 +118,46 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     if price <= 0:
         raise RuntimeError("Prix invalide")
 
-    base_qty = (quote_amt / price) * (1.0 - FEE_BUFFER_PCT)
+    # quantité brute
+    base_qty_raw = (quote_amt / price) * (1.0 - FEE_BUFFER_PCT)
 
     limits = market.get("limits") or {}
     min_amount = float((limits.get("amount") or {}).get("min") or 0.0)
     min_cost   = float((limits.get("cost")   or {}).get("min") or 0.0)
+    step       = _amount_step_from_market(market)
 
+    # aligne sur min_cost si nécessaire
+    base_qty = base_qty_raw
     if min_cost and (base_qty * price) < min_cost:
         base_qty = min_cost / price
+
+    # aligne sur min_amount si nécessaire
     if min_amount and base_qty < min_amount:
         base_qty = min_amount
 
-    step = _amount_step_from_market(market)
+    # arrondi au pas
     if step:
         base_qty = _round_to_step(base_qty, step)
 
+    # filet: si toujours trop petit vs lot minimal → calcule le quote min requis
+    minimal_lot = max(step or 0.0, min_amount or 0.0)
+    if minimal_lot and base_qty < minimal_lot:
+        required_quote = (minimal_lot * price) * (1.0 + FEE_BUFFER_PCT)
+        raise RuntimeError(
+            f"Montant trop faible pour le lot minimal: lot_min={minimal_lot} {symbol.split('/')[0]} "
+            f"(≈ {required_quote:.2f} {symbol.split('/')[1]} requis)"
+        )
+
     return base_qty, price, market
+
+def _tp_sl_from_confidence(conf: int) -> Tuple[float, float]:
+    """
+    Retourne (tp_pct, sl_pct) en pourcentage décimal.
+    confidence=2 -> prudent ; confidence>=3 -> ambitieux.
+    """
+    if conf >= 3:
+        return (0.008, 0.005)   # +0.8% / -0.5%
+    return (0.003, 0.002)       # +0.3% / -0.2%
 
 # ========= Routes =========
 @app.get("/")
@@ -150,13 +171,11 @@ def health():
 @app.post("/webhook")
 def webhook():
     try:
-        # --- Auth simple par token (optionnel) ---
+        # Auth simple optionnelle
         if WEBHOOK_TOKEN:
-            given = (
-                request.headers.get("X-Webhook-Token")
-                or request.args.get("token")
-                or (request.get_json(silent=True) or {}).get("token")
-            )
+            given = (request.headers.get("X-Webhook-Token")
+                     or request.args.get("token")
+                     or (request.get_json(silent=True) or {}).get("token"))
             if given != WEBHOOK_TOKEN:
                 return jsonify({"error": "unauthorized"}), 401
 
@@ -167,33 +186,54 @@ def webhook():
         if signal not in {"BUY", "SELL"}:
             return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
 
+        # symbol & confiance
         symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or SYMBOL_DEFAULT)
-
-        quote_to_use = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
-        if quote_to_use < MIN_QUOTE_PER_TRADE:
-            log.warning("Montant QUOTE %s < MIN_QUOTE_PER_TRADE %s", quote_to_use, MIN_QUOTE_PER_TRADE)
-
-        if ORDER_TYPE != "market":
-            return jsonify({"error": "Cette version ne gère que les ordres market"}), 400
+        conf   = int(payload.get("confidence") or payload.get("indicators_count") or 2)
+        tp_pct, sl_pct = _tp_sl_from_confidence(conf)
 
         ex = _make_exchange()
 
-        # === BUY ===
         if signal == "BUY":
-            base_qty, price, market = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
-            if base_qty <= 0:
-                return jsonify({"error": "qty base <= 0 après calcul"}), 400
+            # quote demandée – réserve USDT
+            requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
+            if requested_quote < MIN_QUOTE_PER_TRADE:
+                log.warning("Montant QUOTE %s < MIN_QUOTE_PER_TRADE %s", requested_quote, MIN_QUOTE_PER_TRADE)
 
-            log.info("BUY %s ~%.8f %s | qty=%s", symbol, price, QUOTE_SYMBOL, base_qty)
+            # vérifie dispo USDT et applique QUOTE_RESERVE
+            free = ex.fetch_free_balance()
+            avail_quote = float(free.get(QUOTE_SYMBOL, 0.0))
+            usable_quote = max(0.0, avail_quote - QUOTE_RESERVE)
+            quote_to_use = min(requested_quote, usable_quote)
+
+            if quote_to_use <= 0:
+                return jsonify({"error":"Pas assez de QUOTE disponible (réserve incluse)",
+                                "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
+
+            # sizing
+            try:
+                base_qty, price, market = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
+            except Exception as e:
+                log.warning("Sizing error: %s", e)
+                return jsonify({"error": "sizing_error", "detail": str(e),
+                                "suggestion": "Augmente le montant quote ou diminue la réserve QUOTE"}), 400
+
+            if ORDER_TYPE != "market":
+                return jsonify({"error": "Cette version ne gère que les ordres market"}), 400
+
+            log.info("BUY %s quote=%.4f -> qty=%.8f (price~%.2f) | reserves: QUOTE=%s, BASE=%s",
+                     symbol, quote_to_use, base_qty, price, QUOTE_RESERVE, BASE_RESERVE)
 
             if DRY_RUN:
-                return jsonify({"ok": True, "dry_run": True, "action": "BUY", "symbol": symbol, "qty": base_qty, "price": price}), 200
+                return jsonify({"ok": True, "dry_run": True, "action": "BUY",
+                                "symbol": symbol, "qty": base_qty, "price": price,
+                                "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
 
             order = ex.create_market_buy_order(symbol, base_qty)
-            log.info("BUY filled: %s", json.dumps(order, default=str))
-            return jsonify({"ok": True, "order": order}), 200
+            return jsonify({"ok": True, "order": order,
+                            "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
 
-        # === SELL ===
+        # SELL
+        # quantité override ?
         qty_override = payload.get("qty_base")
         if qty_override is not None:
             try:
@@ -201,8 +241,15 @@ def webhook():
             except Exception:
                 return jsonify({"error": "qty_base invalide"}), 400
         else:
-            base_qty, price, _ = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
+            # calcule depuis un montant quote (rare en SELL, mais possible)
+            requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
+            try:
+                base_qty, price, _ = _compute_base_qty_for_quote(ex, symbol, requested_quote)
+            except Exception as e:
+                log.warning("Sizing error SELL: %s", e)
+                return jsonify({"error": "sizing_error", "detail": str(e)}), 400
 
+        # ne pas dépasser le disponible (laisse BASE_RESERVE)
         balances = ex.fetch_free_balance()
         base_code = symbol.split("/")[0]
         avail_base = float(balances.get(base_code, 0.0))
@@ -210,16 +257,22 @@ def webhook():
         base_qty = min(base_qty, sellable)
 
         if base_qty <= 0:
-            return jsonify({"error": "Pas de quantité base vendable (réserve incluse)"}), 400
+            return jsonify({"error": "Pas de quantité base vendable (réserve incluse)",
+                            "available_base": avail_base, "base_reserve": BASE_RESERVE}), 400
 
-        log.info("SELL %s qty=%s (reserve=%s, avail=%s)", symbol, base_qty, BASE_RESERVE, avail_base)
+        if ORDER_TYPE != "market":
+            return jsonify({"error": "Cette version ne gère que les ordres market"}), 400
+
+        log.info("SELL %s qty=%.8f (avail=%.8f, reserve=%.8f)", symbol, base_qty, avail_base, BASE_RESERVE)
 
         if DRY_RUN:
-            return jsonify({"ok": True, "dry_run": True, "action": "SELL", "symbol": symbol, "qty": base_qty}), 200
+            return jsonify({"ok": True, "dry_run": True, "action": "SELL",
+                            "symbol": symbol, "qty": base_qty,
+                            "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
 
         order = ex.create_market_sell_order(symbol, base_qty)
-        log.info("SELL filled: %s", json.dumps(order, default=str))
-        return jsonify({"ok": True, "order": order}), 200
+        return jsonify({"ok": True, "order": order,
+                        "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
 
     except ccxt.InsufficientFunds as e:
         log.warning("Fonds insuffisants: %s", str(e))
@@ -234,4 +287,6 @@ def webhook():
         log.exception("Erreur serveur")
         return jsonify({"error": str(e)}), 500
 
-if __name__ == "__m
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "3000"))
+    app.run(host="0.0.0.0", port=port)
