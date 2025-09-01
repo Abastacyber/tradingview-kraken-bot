@@ -37,7 +37,7 @@ SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"
 ORDER_TYPE             = env_str("ORDER_TYPE", "market").lower()
 FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 30.0)
 FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)     # 0.2%
-MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)
+MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0) # <<— nom correct
 
 BASE_RESERVE           = env_float("BASE_RESERVE", 0.00005)     # réserve BTC
 QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 10.0)       # réserve USDT
@@ -152,13 +152,13 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     return base_qty, price, market
 
 def _tp_sl_from_confidence(conf: int) -> Tuple[float, float]:
-    # retourne (tp_pct, sl_pct)
+    # (tp_pct, sl_pct)
     if conf >= 3:
         return (0.008, 0.005)   # +0.8% / -0.5%
     return (0.003, 0.002)       # +0.3% / -0.2%
 
 def _trail_params(conf:int)->Tuple[float,float]:
-    # retourne (activate_pct, gap)
+    # (activate_pct, gap)
     if conf >= 3:
         return (TRAIL_ACTIVATE_PCT_CONF3, TRAIL_GAP_CONF3)
     return (TRAIL_ACTIVATE_PCT_CONF2, TRAIL_GAP_CONF2)
@@ -241,8 +241,13 @@ def webhook():
 
         if signal == "BUY":
             requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
+
+            # --- Blocage si quote < MIN_QUOTE_PER_TRADE
             if requested_quote < MIN_QUOTE_PER_TRADE:
-                log.warning("Montant QUOTE %s < MIN_QUOTE_PER_TRADE %s", requested_quote, MIN_QUOTE_PER_TRADE)
+                return jsonify({
+                    "error": "sizing_error",
+                    "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}, tu as {requested_quote}"
+                }), 400
 
             # réserve USDT
             balances = ex.fetch_free_balance()
