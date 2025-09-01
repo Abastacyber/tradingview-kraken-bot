@@ -28,20 +28,19 @@ def env_int(name: str, default: int = 0) -> int:
 # ========= Lecture ENV =========
 LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
 EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()       # "phemex"
-BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC")               # "BTC"
-QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT")             # "USDT"
-# SYMBOL est toujours reconstruit au format ccxt "BASE/QUOTE"
-SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"
+BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC").upper()       # "BTC"
+QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT").upper()     # "USDT"
+SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"             # format ccxt
 
 ORDER_TYPE             = env_str("ORDER_TYPE", "market").lower()     # uniquement market ici
-SIZE_MODE              = env_str("SIZE_MODE", "fixed_quote")         # informatif
-FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 15.0)    # en QUOTE (ex: 15 USDT)
+SIZE_MODE              = env_str("SIZE_MODE", "fixed_quote")
+FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 15.0)    # en QUOTE
 FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)          # 0.2%
 MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)      # garde-fou
-BASE_RESERVE           = env_float("BASE_RESERVE", 0.00005)          # réserve en BASE (ex: BTC)
+BASE_RESERVE           = env_float("BTC_RESERVE", 0.00005)           # réserve en BASE
 
-WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "")                # optionnel: shared secret
-DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1","true","yes")
+WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "")                # optionnel (X-Webhook-Token)
+DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
 API_KEY                = env_str("PHEMEX_API_KEY")
 API_SECRET             = env_str("PHEMEX_API_SECRET")
@@ -70,13 +69,10 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
     if "/" in s:
         base, quote = s.split("/", 1)
         return f"{base}/{quote}"
-    # Pas de "/", on essaye de splitter BASE/QUOTE naïvement (BTCUSDT -> BTC/USDT)
-    # On cherche des QUOTE courantes
-    for q in ["USDT", "USD", "USDC", "EUR", "BTC", "ETH"]:
+    for q in ("USDT", "USD", "USDC", "EUR", "BTC", "ETH"):
         if s.endswith(q):
             base = s[:-len(q)]
             return f"{base}/{q}"
-    # fallback
     return SYMBOL_DEFAULT
 
 def _make_exchange():
@@ -84,9 +80,7 @@ def _make_exchange():
     ex = ccxt.phemex({
         "apiKey": API_KEY,
         "secret": API_SECRET,
-        "options": {
-            "defaultType": "spot",
-        },
+        "options": {"defaultType": "spot"},
         "enableRateLimit": True,
     })
     return ex
@@ -101,15 +95,12 @@ def _round_to_step(value: float, step: float) -> float:
     return math.floor(value / step) * step
 
 def _amount_step_from_market(market: Dict[str, Any]) -> float:
-    # 1) précision décimale
     precision = (market.get("precision") or {}).get("amount")
     if precision is not None:
         try:
-            decimals = int(precision)
-            return 10 ** (-decimals)
+            return 10 ** (-int(precision))
         except Exception:
             pass
-    # 2) lot size exposé côté info
     info = market.get("info") or {}
     for k in ("lotSz", "lotSize", "qtyStep"):
         if k in info:
@@ -126,11 +117,10 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     market = markets[symbol]
 
     ticker = ex.fetch_ticker(symbol)
-    price = float(ticker.get("last") or ticker.get("close") or ticker.get("ask") or ticker.get("bid"))
+    price = float(ticker.get("last") or ticker.get("close") or ticker.get("ask") or ticker.get("bid") or 0.0)
     if price <= 0:
         raise RuntimeError("Prix invalide")
 
-    # conversion QUOTE -> BASE avec marge de frais
     base_qty = (quote_amt / price) * (1.0 - FEE_BUFFER_PCT)
 
     limits = market.get("limits") or {}
@@ -162,7 +152,11 @@ def webhook():
     try:
         # --- Auth simple par token (optionnel) ---
         if WEBHOOK_TOKEN:
-            given = request.headers.get("X-Webhook-Token") or request.args.get("token") or (request.json or {}).get("token")
+            given = (
+                request.headers.get("X-Webhook-Token")
+                or request.args.get("token")
+                or (request.get_json(silent=True) or {}).get("token")
+            )
             if given != WEBHOOK_TOKEN:
                 return jsonify({"error": "unauthorized"}), 401
 
@@ -184,7 +178,7 @@ def webhook():
 
         ex = _make_exchange()
 
-        # --- BUY ---
+        # === BUY ===
         if signal == "BUY":
             base_qty, price, market = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
             if base_qty <= 0:
@@ -199,7 +193,7 @@ def webhook():
             log.info("BUY filled: %s", json.dumps(order, default=str))
             return jsonify({"ok": True, "order": order}), 200
 
-        # --- SELL ---
+        # === SELL ===
         qty_override = payload.get("qty_base")
         if qty_override is not None:
             try:
@@ -240,6 +234,4 @@ def webhook():
         log.exception("Erreur serveur")
         return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "3000"))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == "__m
