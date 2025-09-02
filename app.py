@@ -43,8 +43,8 @@ BASE_RESERVE           = env_float("BASE_RESERVE", 0.00005)
 QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 10.0)
 
 # Gestion du risque
-RISK_PCT               = env_float("RISK_PCT", 0.01)   # 1% du montant de l'ordre
-MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05) # 5% max
+RISK_PCT               = env_float("RISK_PCT", 0.01)   # 1% du montant de l'ordre (borne SL)
+MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05) # 5% max (filet ultime)
 
 WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "")
 DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1","true","yes")
@@ -56,16 +56,37 @@ TRAIL_GAP_CONF2            = env_float("TRAIL_GAP_CONF2",           0.0025) # 0.
 TRAIL_ACTIVATE_PCT_CONF3   = env_float("TRAIL_ACTIVATE_PCT_CONF3", 0.005)   # +0.50%
 TRAIL_GAP_CONF3            = env_float("TRAIL_GAP_CONF3",           0.0035) # 0.35%
 
-# Cooldown BUY pour éviter double-achat (si 2 alertes BUY)
+# Cooldown BUY
 BUY_COOLDOWN_SEC       = env_int("BUY_COOLDOWN_SEC", 0)
+
+# Persistance d'état simple (fichier)
+STATE_FILE             = env_str("STATE_FILE", "/tmp/bot_state.json")
+RESTORE_ON_START       = env_str("RESTORE_ON_START", "true").lower() in ("1","true","yes")
 
 API_KEY                = env_str("PHEMEX_API_KEY")
 API_SECRET             = env_str("PHEMEX_API_SECRET")
 
-# État simple (une paire)
+# ========= État mémoire (simple, 1 paire) =========
 _position_lock = threading.Lock()
+_state_lock = threading.Lock()
 _has_position = False
-_last_buy_ts = 0  # pour le cooldown
+_last_buy_ts = 0
+
+def _read_state() -> dict:
+    try:
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _write_state(data: dict):
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)  # atomic on POSIX
+    except Exception as e:
+        logging.getLogger("tv-phemex").warning("State write failed: %s", e)
 
 # ========= Logs =========
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
@@ -131,7 +152,7 @@ def _amount_step_from_market(market: Dict[str, Any]) -> float | None:
 def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[float, float, Dict[str, Any]]:
     """
     Convertit un montant QUOTE -> quantité BASE, en respectant minCost/minAmount/step.
-    Ajoute un garde-fou pour ignorer des min_amount irréalistes (ex: 1 BTC remonté par erreur).
+    Ajoute un garde-fou pour ignorer des min_amount irréalistes (ex: 1 BTC).
     """
     markets = _load_markets(ex)
     if symbol not in markets:
@@ -150,11 +171,10 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     min_cost   = float((limits.get("cost")   or {}).get("min") or 0.0)
     step       = _amount_step_from_market(market)
 
-    # --- PATCH: ignorer min_amount irréaliste (ex: 1 BTC alors que step ~ 1e-6) ---
+    # PATCH: ignorer min_amount irréaliste (ex: 1 BTC quand step ~ 1e-6)
     if step and min_amount and (min_amount >= step * 1000):
         log.debug("Ignorer min_amount irréaliste: min_amount=%s, step=%s", min_amount, step)
         min_amount = 0.0
-    # ------------------------------------------------------------------------------
 
     base_qty = base_qty_raw
     if min_cost and (base_qty * price) < min_cost:
@@ -188,13 +208,13 @@ def _trail_params(conf:int)->Tuple[float,float]:
 # ========= Trailing monitor (côté bot) =========
 def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float,
                       conf: int, base_sl_pct: float):
-    """Thread de suivi : trailing stop côté bot."""
+    """Thread de suivi : trailing stop côté bot, avec stop initial borné."""
     global _has_position
 
     if not TRAILING_ENABLED or side != "BUY" or qty <= 0:
         return
 
-    # PATCH: recréer un client ccxt dans le thread
+    # recrée un client ccxt dans le thread
     try:
         ex = _make_exchange()
     except Exception as e:
@@ -203,12 +223,10 @@ def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float
 
     activate_pct, gap = _trail_params(conf)
     max_price = entry_price
-    trail_stop = entry_price * (1.0 - base_sl_pct)
-    activated = False
-
-    # Stop initial borné par MAX_SL_PCT
     risk_sl_pct = min(base_sl_pct, MAX_SL_PCT)
     initial_stop_price = entry_price * (1.0 - risk_sl_pct)
+    trail_stop = initial_stop_price
+    activated = False
 
     log.info("[TRAIL] start %s qty=%.8f entry=%.2f conf=%s baseSL=%.4f",
              symbol, qty, entry_price, conf, base_sl_pct)
@@ -227,6 +245,8 @@ def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float
                     try:
                         ex.create_market_sell_order(symbol, qty)
                         _has_position = False
+                        with _state_lock:
+                            _write_state({"open": False, "symbol": symbol, "ts": time.time()})
                         log.info("[TRAIL] Position fermée (SL initial).")
                     except Exception as e:
                         log.warning("[TRAIL] SELL initial SL failed: %s", e)
@@ -240,7 +260,6 @@ def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float
             if activated:
                 if last > max_price:
                     max_price = last
-                    # trail stop ne redescend pas sous le SL initial
                     trail_stop = max(initial_stop_price, max_price * (1.0 - gap))
 
             if last <= trail_stop:
@@ -249,6 +268,8 @@ def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float
                     try:
                         ex.create_market_sell_order(symbol, qty)
                         _has_position = False
+                        with _state_lock:
+                            _write_state({"open": False, "symbol": symbol, "ts": time.time()})
                         log.info("[TRAIL] Position fermée (trailing stop).")
                     except Exception as e:
                         log.warning("[TRAIL] SELL failed: %s", e)
@@ -262,6 +283,41 @@ def _monitor_trailing(ex, symbol: str, side: str, qty: float, entry_price: float
 
     log.info("[TRAIL] thread finished.")
     _has_position = False  # garde-fou
+
+# ========= Restauration au démarrage =========
+def _restore_open_position():
+    if not RESTORE_ON_START:
+        return
+    st = _read_state()
+    if not st or not st.get("open"):
+        return
+    try:
+        symbol = _normalize_to_ccxt_symbol(st.get("symbol") or SYMBOL_DEFAULT)
+        qty = float(st.get("qty") or 0.0)
+        entry_price = float(st.get("entry_price") or 0.0)
+        conf = int(st.get("conf") or 2)
+        sl_pct = float(st.get("sl_pct") or 0.002)
+        if qty > 0 and entry_price > 0:
+            log.warning("[RESTORE] Position détectée -> relance trailing (qty=%.8f, entry=%.2f, conf=%s)",
+                        qty, entry_price, conf)
+            global _has_position
+            _has_position = True
+            ex = _make_exchange()
+            threading.Thread(
+                target=_monitor_trailing,
+                args=(ex, symbol, "BUY", qty, entry_price, conf, sl_pct),
+                daemon=True
+            ).start()
+        else:
+            log.warning("[RESTORE] État ouvert mais incomplet, on l'ignore: %s", st)
+    except Exception as e:
+        log.warning("[RESTORE] échec: %s", e)
+
+# lancer la restauration une fois à l'import (utiliser 1 worker)
+try:
+    _restore_open_position()
+except Exception as _e:
+    log.warning("Restore on start failed: %s", _e)
 
 # ========= Routes =========
 @app.get("/")
@@ -301,7 +357,6 @@ def webhook():
 
             # -------- BUY --------
             if signal == "BUY":
-                # Cooldown anti double-achat
                 now = time.time()
                 if BUY_COOLDOWN_SEC > 0 and (now - _last_buy_ts) < BUY_COOLDOWN_SEC:
                     return jsonify({"ok": False, "skipped": "buy_cooldown",
@@ -314,7 +369,7 @@ def webhook():
 
                 requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
 
-                # Ajustement risque simple: si sl_pct > RISK_PCT, on le borne
+                # borne simple du SL par RISK_PCT
                 if requested_quote * sl_pct > requested_quote * RISK_PCT:
                     log.warning("Risque de perte (%.2f%%) > max (%.2f%%). SL borné.",
                                 sl_pct*100, RISK_PCT*100)
@@ -351,6 +406,11 @@ def webhook():
                 if DRY_RUN:
                     _has_position = True
                     _last_buy_ts = now
+                    with _state_lock:
+                        _write_state({
+                            "open": True, "symbol": symbol, "qty": base_qty,
+                            "entry_price": price, "conf": conf, "sl_pct": sl_pct, "ts": time.time()
+                        })
                     return jsonify({"ok": True, "dry_run": True, "action": "BUY",
                                     "symbol": symbol, "qty": base_qty, "price": price,
                                     "tp_pct": tp_pct, "sl_pct": sl_pct,
@@ -366,13 +426,22 @@ def webhook():
                     t = ex.fetch_ticker(symbol)
                     fill_price = float(t.get("last") or t.get("close") or 0.0)
 
+                filled_qty = float(order.get("filled") or base_qty)
+
                 _has_position = True
                 _last_buy_ts = now
+
+                # persister l'état
+                with _state_lock:
+                    _write_state({
+                        "open": True, "symbol": symbol, "qty": filled_qty,
+                        "entry_price": fill_price, "conf": conf, "sl_pct": sl_pct, "ts": time.time()
+                    })
 
                 if TRAILING_ENABLED:
                     threading.Thread(
                         target=_monitor_trailing,
-                        args=(ex, symbol, "BUY", base_qty, fill_price, conf, sl_pct),
+                        args=(ex, symbol, "BUY", filled_qty, fill_price, conf, sl_pct),
                         daemon=True
                     ).start()
 
@@ -400,7 +469,7 @@ def webhook():
             else:
                 requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
 
-                # Close-all si quote très grand (ex: 999999)
+                # Close-all si quote énorme (ex: 999999)
                 if requested_quote >= 1e5:
                     base_qty_to_sell = sellable
                 else:
@@ -423,12 +492,16 @@ def webhook():
 
             if DRY_RUN:
                 _has_position = False
+                with _state_lock:
+                    _write_state({"open": False, "symbol": symbol, "ts": time.time()})
                 return jsonify({"ok": True, "dry_run": True, "action": "SELL",
                                 "symbol": symbol, "qty": base_qty_to_sell,
                                 "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
 
             order = ex.create_market_sell_order(symbol, base_qty_to_sell)
             _has_position = False
+            with _state_lock:
+                _write_state({"open": False, "symbol": symbol, "ts": time.time()})
 
             return jsonify({"ok": True, "order": order,
                             "tp_pct": tp_pct, "sl_pct": sl_pct, "confidence": conf}), 200
