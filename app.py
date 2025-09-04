@@ -471,7 +471,6 @@ def webhook():
                 requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
                 try:
                     base_qty_to_sell, price = _compute_base_qty_for_quote(ex, symbol, requested_quote)
-                    base_qty_to_sell = float(ex.amount_to_precision(symbol, base_qty_to_sell))
                 except Exception as e:
                     log.warning("Sizing error SELL: %s", e)
                     return jsonify({"error": "sizing_error", "detail": str(e)}), 400
