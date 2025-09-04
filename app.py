@@ -389,7 +389,7 @@ def webhook():
 
                 try:
                     base_qty, price = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
-                    base_qty = float(ex.amount_to_precision(symbol, base_qty))
+                    
                 except Exception as e:
                     log.warning("Sizing error BUY: %s", e)
                     return jsonify({"error": "sizing_error", "detail": str(e)}), 400
