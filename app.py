@@ -1,4 +1,3 @@
-# app.py
 import os
 import json
 import math
@@ -29,54 +28,55 @@ def env_int(name: str, default: int = 0) -> int:
         return int(default)
 
 # ========= ENV =========
-LOG_LEVEL               = env_str("LOG_LEVEL", "INFO").upper()
-EXCHANGE_NAME           = env_str("EXCHANGE", "phemex").lower()
+# Configurations extraites des captures d'écran de l'utilisateur
+LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
+EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()
 
-BASE_SYMBOL             = env_str("BASE_SYMBOL", "BTC").upper()
-QUOTE_SYMBOL            = env_str("QUOTE_SYMBOL", "USDT").upper()
-SYMBOL_DEFAULT          = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"
+BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC").upper()
+QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT").upper()
+SYMBOL_DEFAULT         = f"{BASE_SYMBOL}/{QUOTE_SYMBOL}"
 
-ORDER_TYPE              = env_str("ORDER_TYPE", "market").lower()
+ORDER_TYPE             = env_str("ORDER_TYPE", "market").lower()
 
 # sizing / coûts
-FIXED_QUOTE_PER_TRADE   = env_float("FIXED_QUOTE_PER_TRADE", 45.0)
-MIN_QUOTE_PER_TRADE     = env_float("MIN_QUOTE_PER_TRADE", 45.0)     # garde-fou local
-FEE_BUFFER_PCT          = env_float("FEE_BUFFER_PCT", 0.002)         # 0.2 %
+FIXED_QUOTE_PER_TRADE  = env_float("FIXED_QUOTE_PER_TRADE", 10.0)
+MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)      # garde-fou local
+FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)          # 0.2 %
 
 # réserves
-BASE_RESERVE            = env_float("BASE_RESERVE", 0.00005)
-QUOTE_RESERVE           = env_float("QUOTE_RESERVE", 10.0)
+BASE_RESERVE           = env_float("BASE_RESERVE", 0.000005)
+QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 5.0)
 
 # gestion risque / SL
-RISK_PCT                = env_float("RISK_PCT", 0.01)   # max perte vs ticket (1%)
-MAX_SL_PCT              = env_float("MAX_SL_PCT", 0.05) # SL dur max (5%)
+RISK_PCT               = env_float("RISK_PCT", 0.02)     # max perte vs ticket (2%)
+MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05)   # SL dur max (5%)
 
 # cooldown achat
-BUY_COOL_SEC            = env_int("BUY_COOL_SEC", 180)
+BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 
 # sécurité / bac à sable
-DRY_RUN                 = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
-WEBHOOK_TOKEN           = env_str("WEBHOOK_TOKEN", "")
+DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
+WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "supersecret_token_12345")
 
 # Trailing côté bot
 TRAILING_ENABLED         = env_str("TRAILING_ENABLED", "true").lower() in ("1", "true", "yes")
-TRAIL_ACTIVATE_PCT_CONF2 = env_float("TRAIL_ACTIVATE_PCT_CONF2", 0.003)  # +0.30 %
-TRAIL_GAP_CONF2          = env_float("TRAIL_GAP_CONF2",       0.0025)    # 0.25 %
-TRAIL_ACTIVATE_PCT_CONF3 = env_float("TRAIL_ACTIVATE_PCT_CONF3", 0.005)  # +0.50 %
-TRAIL_GAP_CONF3          = env_float("TRAIL_GAP_CONF3",       0.0035)    # 0.35 %
+TRAIL_ACTIVATE_PCT_CONF2 = env_float("TRAIL_ACTIVATE_PCT_CONF2", 0.004) # +0.40 %
+TRAIL_GAP_CONF2          = env_float("TRAIL_GAP_CONF2",        0.002)   # 0.20 %
+TRAIL_ACTIVATE_PCT_CONF3 = env_float("TRAIL_ACTIVATE_PCT_CONF3", 0.006) # +0.60 %
+TRAIL_GAP_CONF3          = env_float("TRAIL_GAP_CONF3",        0.003)   # 0.30 %
 
 # Persistance d'état (simple fichier json)
-STATE_FILE              = env_str("STATE_FILE", "/tmp/bot_state.json")
-RESTORE_ON_START        = env_str("RESTORE_ON_START", "true").lower() in ("1", "true", "yes")
+STATE_FILE             = env_str("STATE_FILE", "/tmp/bot_state.json")
+RESTORE_ON_START       = env_str("RESTORE_ON_START", "true").lower() in ("1", "true", "yes")
 
-# Clés API
-API_KEY                 = env_str("PHEMEX_API_KEY")
-API_SECRET              = env_str("PHEMEX_API_SECRET")
+# Clés API (Note: il est plus sûr d'utiliser des variables d'environnement)
+API_KEY                = env_str("PHEMEX_API_KEY", "my_phemex_api_key_123")
+API_SECRET             = env_str("PHEMEX_API_SECRET", "my_phemex_api_secret_456")
 
 # Volume / micro-chunking (optionnel)
-BUY_SPLIT_CHUNKS        = max(1, env_int("BUY_SPLIT_CHUNKS", 1))     # ex: 3 -> 3 ordres par BUY
-BUY_SPLIT_DELAY_MS      = max(0, env_int("BUY_SPLIT_DELAY_MS", 300)) # pause entre micro-ordres
-SELL_SPLIT_CHUNKS       = max(1, env_int("SELL_SPLIT_CHUNKS", 1))    # ex: 2 -> 2 ordres par SELL
+BUY_SPLIT_CHUNKS       = max(1, env_int("BUY_SPLIT_CHUNKS", 2))       # ex: 3 -> 3 ordres par BUY
+BUY_SPLIT_DELAY_MS     = max(0, env_int("BUY_SPLIT_DELAY_MS", 500))   # pause entre micro-ordres
+SELL_SPLIT_CHUNKS      = max(1, env_int("SELL_SPLIT_CHUNKS", 1))      # ex: 2 -> 2 ordres par SELL
 
 # ========= Logs =========
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
@@ -379,7 +379,7 @@ def webhook():
                 if st.get("last_buy_ts", 0) and (now - st["last_buy_ts"] < BUY_COOL_SEC):
                     wait = BUY_COOL_SEC - (now - st["last_buy_ts"])
                     return jsonify({"ok": False, "reason": "buy_cooldown",
-                                    "cooldown_remaining_sec": int(wait)}), 200
+                                     "cooldown_remaining_sec": int(wait)}), 200
 
                 if st.get("has_position"):
                     return jsonify({"ok": False, "reason": "position_already_open"}), 200
@@ -387,7 +387,7 @@ def webhook():
                 requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
                 if requested_quote < MIN_QUOTE_PER_TRADE:
                     return jsonify({"error": "sizing_error",
-                                    "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"}), 400
+                                     "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"}), 400
 
                 # cap par réserve QUOTE
                 balances = ex.fetch_free_balance()
@@ -396,12 +396,12 @@ def webhook():
                 quote_to_use = min(requested_quote, usable_quote)
                 if quote_to_use <= 0:
                     return jsonify({"error": "Pas assez de QUOTE (réserve incluse)",
-                                    "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
+                                     "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
 
                 # Ajuste SL si RISK_PCT plus strict
                 if requested_quote * sl_pct > requested_quote * RISK_PCT:
                     log.warning("SL %.2f%% > RISK_PCT %.2f%% -> on borne à RISK_PCT",
-                                sl_pct*100, RISK_PCT*100)
+                                 sl_pct*100, RISK_PCT*100)
                     sl_pct = RISK_PCT
 
                 if ORDER_TYPE != "market":
@@ -462,12 +462,12 @@ def webhook():
                                      daemon=True).start()
 
                 return jsonify({"ok": True,
-                                "orders": orders,
-                                "total_qty": total_qty,
-                                "avg_price": vwap,
-                                "tp_pct": tp_pct, "sl_pct": sl_pct,
-                                "confidence": conf,
-                                "trailing_enabled": TRAILING_ENABLED}), 200
+                                 "orders": orders,
+                                 "total_qty": total_qty,
+                                 "avg_price": vwap,
+                                 "tp_pct": tp_pct, "sl_pct": sl_pct,
+                                 "confidence": conf,
+                                 "trailing_enabled": TRAILING_ENABLED}), 200
 
             # ===== SELL =====
             force_close = bool(payload.get("force_close") or False)
@@ -495,7 +495,7 @@ def webhook():
             base_qty_to_sell = min(base_qty_to_sell, sellable)
             if base_qty_to_sell <= 0:
                 return jsonify({"error": "Pas de quantité base vendable (réserve incluse)",
-                                "available_base": avail_base, "base_reserve": BASE_RESERVE}), 400
+                                 "available_base": avail_base, "base_reserve": BASE_RESERVE}), 400
 
             if ORDER_TYPE != "market":
                 return jsonify({"error": "Cette version ne gère que market"}), 400
@@ -521,7 +521,7 @@ def webhook():
             if DRY_RUN:
                 _with_state(lambda s: s.update({"has_position": False, "last_qty": 0.0}))
                 return jsonify({"ok": True, "dry_run": True, "action": "SELL",
-                                "symbol": symbol, "qty": base_qty_to_sell}), 200
+                                 "symbol": symbol, "qty": base_qty_to_sell}), 200
 
             for i in range(sell_chunks):
                 q = chunk_qty if i < sell_chunks - 1 else remaining
