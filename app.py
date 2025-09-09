@@ -28,7 +28,6 @@ def env_int(name: str, default: int = 0) -> int:
         return int(default)
 
 # ========= ENV =========
-# Configurations extraites des captures d'écran de l'utilisateur
 LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
 EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()
 
@@ -57,12 +56,11 @@ BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 # sécurité / bac à sable
 DRY_RUN         = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
-# Utilise WEBHOOK_SECRET (recommandé). Compat: si WEBHOOK_SECRET absent, on regarde WEBHOOK_TOKEN.
-WEBHOOK_SECRET  = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))
-
+# --- NOUVEAU : secret compatible TradingView (dans le JSON) ---
+WEBHOOK_SECRET  = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))  # compat ancien TOKEN
 if not WEBHOOK_SECRET:
-    log.warning("Aucun WEBHOOK_SECRET défini – webhook ouvert (OK pour tests, à éviter en prod)")
-
+    # autorisé pour debug, déconseillé en prod
+    logging.warning("Aucun WEBHOOK_SECRET défini – webhook ouvert (OK pour tests)")
 
 # Trailing côté bot
 TRAILING_ENABLED         = env_str("TRAILING_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -75,9 +73,13 @@ TRAIL_GAP_CONF3          = env_float("TRAIL_GAP_CONF3",        0.003)   # 0.30 %
 STATE_FILE             = env_str("STATE_FILE", "/tmp/bot_state.json")
 RESTORE_ON_START       = env_str("RESTORE_ON_START", "true").lower() in ("1", "true", "yes")
 
-# Clés API (Note: il est plus sûr d'utiliser des variables d'environnement)
-API_KEY                = env_str("PHEMEX_API_KEY", "my_phemex_api_key_123")
-API_SECRET             = env_str("PHEMEX_API_SECRET", "my_phemex_api_secret_456")
+# Clés API
+API_KEY                = env_str("PHEMEX_API_KEY", "")
+API_SECRET             = env_str("PHEMEX_API_SECRET", "")
+
+# Phemex options
+PHEMEX_ENV             = env_str("PHEMEX_ENV", "mainnet").lower()  # "testnet" | "mainnet"
+PHEMEX_DEFAULT_TYPE    = env_str("PHEMEX_DEFAULT_TYPE", "spot").lower()  # "spot" | "swap"
 
 # Volume / micro-chunking (optionnel)
 BUY_SPLIT_CHUNKS       = max(1, env_int("BUY_SPLIT_CHUNKS", 2))       # ex: 3 -> 3 ordres par BUY
@@ -149,12 +151,19 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
 
 def _make_exchange():
     _assert_env()
-    return ccxt.phemex({
+    ex = ccxt.phemex({
         "apiKey": API_KEY,
         "secret": API_SECRET,
-        "options": {"defaultType": "spot"},
+        "options": {"defaultType": PHEMEX_DEFAULT_TYPE},  # spot ou swap
         "enableRateLimit": True,
     })
+    # sandbox si demandé
+    if PHEMEX_ENV in ("testnet", "sandbox", "demo", "paper", "true", "1", "yes"):
+        try:
+            ex.set_sandbox_mode(True)
+        except Exception:
+            pass
+    return ex
 
 @lru_cache(maxsize=1)
 def _load_markets(ex):
@@ -358,15 +367,24 @@ def webhook():
     # Un seul passage à la fois (surtout pour le SELL)
     with _position_lock:
         try:
-            if WEBHOOK_TOKEN:
-                tok = (request.headers.get("X-Webhook-Token")
+            payload = request.get_json(silent=True) or {}
+
+            # --- Auth compatible TradingView: "secret" dans le JSON (ou query), compat token/header ---
+            if WEBHOOK_SECRET:
+                tok = (payload.get("secret")
+                       or request.args.get("secret")
+                       or payload.get("token")
                        or request.args.get("token")
-                       or (request.get_json(silent=True) or {}).get("token"))
-                if tok != WEBHOOK_TOKEN:
+                       or request.headers.get("X-Webhook-Token"))
+                if tok != WEBHOOK_SECRET:
+                    log.warning("Webhook: secret invalide")
                     return jsonify({"error": "unauthorized"}), 401
 
-            payload = request.get_json(silent=True) or {}
-            log.info("Webhook payload: %s", json.dumps(payload, ensure_ascii=False))
+            # Log sans secret
+            safe_payload = dict(payload)
+            safe_payload.pop("secret", None)
+            safe_payload.pop("token", None)
+            log.info("Webhook payload: %s", json.dumps(safe_payload, ensure_ascii=False))
 
             signal = (payload.get("signal") or "").upper()
             if signal not in {"BUY", "SELL"}:
@@ -413,7 +431,7 @@ def webhook():
                 if ORDER_TYPE != "market":
                     return jsonify({"error": "Cette version ne gère que market"}), 400
 
-                # --- Micro-chunking pour "faire du volume" (facultatif) ---
+                # --- Micro-chunking ---
                 chunks = max(1, min(BUY_SPLIT_CHUNKS, 10))
                 per_chunk_quote = quote_to_use / chunks
 
@@ -425,7 +443,6 @@ def webhook():
                     try:
                         base_qty, price = _compute_base_qty_for_quote(ex, symbol, per_chunk_quote)
                     except Exception as e:
-                        # si la taille devient trop petite par chunk -> fallback en 1 ordre
                         if chunks > 1:
                             log.warning("BUY chunk sizing failed (%s) -> fallback single", e)
                             base_qty, price = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
@@ -541,7 +558,6 @@ def webhook():
                     remaining -= q
                 except Exception as e:
                     log.warning("SELL chunk %d failed: %s", i+1, e)
-                    # tente de tout envoyer en 1 si un chunk échoue
                     if sell_chunks > 1 and remaining > 0:
                         try:
                             order = ex.create_market_sell_order(symbol, remaining)
