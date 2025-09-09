@@ -55,8 +55,14 @@ MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05)   # SL dur max (5%)
 BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 
 # sécurité / bac à sable
-DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
-WEBHOOK_TOKEN          = env_str("WEBHOOK_TOKEN", "supersecret_token_12345")
+DRY_RUN         = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
+
+# Utilise WEBHOOK_SECRET (recommandé). Compat: si WEBHOOK_SECRET absent, on regarde WEBHOOK_TOKEN.
+WEBHOOK_SECRET  = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))
+
+if not WEBHOOK_SECRET:
+    log.warning("Aucun WEBHOOK_SECRET défini – webhook ouvert (OK pour tests, à éviter en prod)")
+
 
 # Trailing côté bot
 TRAILING_ENABLED         = env_str("TRAILING_ENABLED", "true").lower() in ("1", "true", "yes")
