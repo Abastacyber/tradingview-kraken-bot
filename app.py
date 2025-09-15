@@ -56,10 +56,9 @@ BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 # sécurité / bac à sable
 DRY_RUN         = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
-# --- NOUVEAU : secret compatible TradingView (dans le JSON) ---
-WEBHOOK_SECRET  = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))  # compat ancien TOKEN
+# --- Secret compatible TradingView ---
+WEBHOOK_SECRET  = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))  # compat ancien nom
 if not WEBHOOK_SECRET:
-    # autorisé pour debug, déconseillé en prod
     logging.warning("Aucun WEBHOOK_SECRET défini – webhook ouvert (OK pour tests)")
 
 # Trailing côté bot
@@ -138,16 +137,29 @@ def _assert_env():
         raise RuntimeError("KRAKEN_API_KEY / KRAKEN_API_SECRET manquants")
 
 def _normalize_to_ccxt_symbol(s: str) -> str:
+    """
+    Normalise un symbole éventuel en unified ccxt.
+    - supporte "XBT" -> "BTC"
+    - accepte "BTC/EUR", "btceur", "BTC-EUR"
+    - fallback sur SYMBOL_DEFAULT si on ne sait pas parser
+    """
     if not s:
         return SYMBOL_DEFAULT
+
     s = s.replace("-", "/").upper()
-    if "/" in s:
-        return s
-    for q in ("USDT", "USD", "USDC", "EUR", "BTC", "ETH"):
-        if s.endswith(q):
-            base = s[:-len(q)]
-            return f"{base}/{q}"
-    return SYMBOL_DEFAULT
+    if "/" not in s:
+        for q in ("USDT", "USD", "USDC", "EUR", "BTC", "ETH"):
+            if s.endswith(q):
+                base = s[:-len(q)]
+                s = f"{base}/{q}"
+                break
+        else:
+            return SYMBOL_DEFAULT
+
+    base, quote = s.split("/")
+    if base == "XBT":  # alias Kraken
+        base = "BTC"
+    return f"{base}/{quote}"
 
 def _make_exchange():
     _assert_env()
@@ -157,7 +169,6 @@ def _make_exchange():
         "options": {"defaultType": KRAKEN_DEFAULT_TYPE},  # spot ou swap
         "enableRateLimit": True,
     })
-    # sandbox si demandé
     if KRAKEN_ENV in ("testnet", "sandbox", "demo", "paper", "true", "1", "yes"):
         try:
             ex.set_sandbox_mode(True)
@@ -211,6 +222,12 @@ def _round_floor(value: float, step: float) -> float:
     if not step or step <= 0:
         return value
     return math.floor(value / step) * step
+
+def _to_exchange_precision(ex, symbol: str, amount: float) -> float:
+    try:
+        return float(ex.amount_to_precision(symbol, amount))
+    except Exception:
+        return amount
 
 def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[float, float]:
     """Retourne (qty_base_arrondie, prix) pour convertir un montant QUOTE -> BASE,
@@ -293,7 +310,10 @@ def _monitor_trailing(symbol: str, qty: float, entry_price: float, conf: int, ba
             if last <= initial_stop:
                 log.warning("[TRAIL] initial SL hit (%.2f <= %.2f) -> SELL", last, initial_stop)
                 try:
-                    ex.create_market_sell_order(symbol, qty)
+                    min_amount, _, step = _get_min_trade_info(ex, symbol, last)
+                    qty_to_sell = _round_floor(qty, step) if step else qty
+                    qty_to_sell = _to_exchange_precision(ex, symbol, qty_to_sell)
+                    ex.create_market_sell_order(symbol, qty_to_sell)
                 except Exception as e:
                     log.warning("[TRAIL] SELL initial failed: %s", e)
                 _with_state(lambda s: s.update({"has_position": False}))
@@ -310,7 +330,10 @@ def _monitor_trailing(symbol: str, qty: float, entry_price: float, conf: int, ba
                 if last <= trail_stop:
                     log.info("[TRAIL] stop hit %.2f <= %.2f -> SELL", last, trail_stop)
                     try:
-                        ex.create_market_sell_order(symbol, qty)
+                        min_amount, _, step = _get_min_trade_info(ex, symbol, last)
+                        qty_to_sell = _round_floor(qty, step) if step else qty
+                        qty_to_sell = _to_exchange_precision(ex, symbol, qty_to_sell)
+                        ex.create_market_sell_order(symbol, qty_to_sell)
                     except Exception as e:
                         log.warning("[TRAIL] SELL failed: %s", e)
                     _with_state(lambda s: s.update({"has_position": False}))
@@ -369,7 +392,7 @@ def webhook():
         try:
             payload = request.get_json(silent=True) or {}
 
-            # --- Auth compatible TradingView: "secret" dans le JSON (ou query), compat token/header ---
+            # --- Auth TradingView: "secret"/"token" JSON ou query/header ---
             if WEBHOOK_SECRET:
                 tok = (payload.get("secret")
                        or request.args.get("secret")
@@ -424,7 +447,7 @@ def webhook():
 
                 # Ajuste SL si RISK_PCT plus strict
                 if requested_quote * sl_pct > requested_quote * RISK_PCT:
-                    log.warning("SL %.2f%% > RISK_PCT %.2f%% -> on borne à RISK_PCT",
+                    log.warning("SL %.2f%% > RISK_PCT %.2f%% -> borné à RISK_PCT",
                                  sl_pct*100, RISK_PCT*100)
                     sl_pct = RISK_PCT
 
@@ -449,6 +472,12 @@ def webhook():
                             chunks = 1
                         else:
                             raise
+
+                    # arrondis finaux avant ordre
+                    min_amount, _, step = _get_min_trade_info(ex, symbol, price)
+                    if step:
+                        base_qty = _round_floor(base_qty, step)
+                    base_qty = _to_exchange_precision(ex, symbol, base_qty)
 
                     log.info("BUY[%d/%d] %s quote=%.2f -> qty=%.8f @~%.2f (resQ=%.2f, resB=%.8f)",
                              i+1, chunks, symbol, per_chunk_quote if chunks>1 else quote_to_use,
@@ -550,6 +579,7 @@ def webhook():
                 q = chunk_qty if i < sell_chunks - 1 else remaining
                 if step:
                     q = _round_floor(q, step)
+                q = _to_exchange_precision(ex, symbol, q)
                 if q <= 0:
                     continue
                 try:
@@ -560,7 +590,8 @@ def webhook():
                     log.warning("SELL chunk %d failed: %s", i+1, e)
                     if sell_chunks > 1 and remaining > 0:
                         try:
-                            order = ex.create_market_sell_order(symbol, remaining)
+                            q2 = _to_exchange_precision(ex, symbol, remaining)
+                            order = ex.create_market_sell_order(symbol, q2)
                             orders.append(order)
                             remaining = 0
                         except Exception as e2:
