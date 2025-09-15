@@ -29,7 +29,7 @@ def env_int(name: str, default: int = 0) -> int:
 
 # ========= ENV =========
 LOG_LEVEL              = env_str("LOG_LEVEL", "INFO").upper()
-EXCHANGE_NAME          = env_str("EXCHANGE", "phemex").lower()
+EXCHANGE_NAME          = env_str("EXCHANGE", "kraken").lower()
 
 BASE_SYMBOL            = env_str("BASE_SYMBOL", "BTC").upper()
 QUOTE_SYMBOL           = env_str("QUOTE_SYMBOL", "USDT").upper()
@@ -74,12 +74,12 @@ STATE_FILE             = env_str("STATE_FILE", "/tmp/bot_state.json")
 RESTORE_ON_START       = env_str("RESTORE_ON_START", "true").lower() in ("1", "true", "yes")
 
 # Clés API
-API_KEY                = env_str("PHEMEX_API_KEY", "")
-API_SECRET             = env_str("PHEMEX_API_SECRET", "")
+API_KEY                = env_str("KRAKEN_API_KEY", "")
+API_SECRET             = env_str("KRAKEN_API_SECRET", "")
 
-# Phemex options
-PHEMEX_ENV             = env_str("PHEMEX_ENV", "mainnet").lower()  # "testnet" | "mainnet"
-PHEMEX_DEFAULT_TYPE    = env_str("PHEMEX_DEFAULT_TYPE", "spot").lower()  # "spot" | "swap"
+# Kraken options
+KRAKEN_ENV             = env_str("KRAKEN_ENV", "mainnet").lower()  # "testnet" | "mainnet"
+KRAKEN_DEFAULT_TYPE    = env_str("KRAKEN_DEFAULT_TYPE", "spot").lower()  # "spot" | "swap"
 
 # Volume / micro-chunking (optionnel)
 BUY_SPLIT_CHUNKS       = max(1, env_int("BUY_SPLIT_CHUNKS", 2))       # ex: 3 -> 3 ordres par BUY
@@ -88,7 +88,7 @@ SELL_SPLIT_CHUNKS      = max(1, env_int("SELL_SPLIT_CHUNKS", 1))      # ex: 2 ->
 
 # ========= Logs =========
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
-log = logging.getLogger("tv-phemex")
+log = logging.getLogger("tv-kraken")
 
 # ========= Flask =========
 app = Flask(__name__)
@@ -132,10 +132,10 @@ def _load_state():
 
 # ========= Exchange helpers =========
 def _assert_env():
-    if EXCHANGE_NAME != "phemex":
+    if EXCHANGE_NAME != "kraken":
         raise RuntimeError(f"Exchange non supporté: {EXCHANGE_NAME}")
     if not API_KEY or not API_SECRET:
-        raise RuntimeError("PHEMEX_API_KEY / PHEMEX_API_SECRET manquants")
+        raise RuntimeError("KRAKEN_API_KEY / KRAKEN_API_SECRET manquants")
 
 def _normalize_to_ccxt_symbol(s: str) -> str:
     if not s:
@@ -151,14 +151,14 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
 
 def _make_exchange():
     _assert_env()
-    ex = ccxt.phemex({
+    ex = ccxt.kraken({
         "apiKey": API_KEY,
         "secret": API_SECRET,
-        "options": {"defaultType": PHEMEX_DEFAULT_TYPE},  # spot ou swap
+        "options": {"defaultType": KRAKEN_DEFAULT_TYPE},  # spot ou swap
         "enableRateLimit": True,
     })
     # sandbox si demandé
-    if PHEMEX_ENV in ("testnet", "sandbox", "demo", "paper", "true", "1", "yes"):
+    if KRAKEN_ENV in ("testnet", "sandbox", "demo", "paper", "true", "1", "yes"):
         try:
             ex.set_sandbox_mode(True)
         except Exception:
@@ -334,7 +334,7 @@ def _with_state(mutator):
 # ========= Routes =========
 @app.get("/")
 def index():
-    return jsonify({"service": "tv-phemex-bot", "status": "ok"}), 200
+    return jsonify({"service": "tv-kraken-bot", "status": "ok"}), 200
 
 @app.get("/health")
 def health():
