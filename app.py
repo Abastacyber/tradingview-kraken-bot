@@ -54,10 +54,10 @@ MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05)   # SL dur max (5%)
 BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 
 # sécurité / bac à sable
-DRY_RUN         = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
+DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
 # --- Secret compatible TradingView ---
-WEBHOOK_SECRET  = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))  # compat ancien nom
+WEBHOOK_SECRET         = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))
 if not WEBHOOK_SECRET:
     logging.warning("Aucun WEBHOOK_SECRET défini – webhook ouvert (OK pour tests)")
 
@@ -77,8 +77,8 @@ API_KEY                = env_str("KRAKEN_API_KEY", "")
 API_SECRET             = env_str("KRAKEN_API_SECRET", "")
 
 # Kraken options
-KRAKEN_ENV             = env_str("KRAKEN_ENV", "mainnet").lower()  # "testnet" | "mainnet"
-KRAKEN_DEFAULT_TYPE    = env_str("KRAKEN_DEFAULT_TYPE", "spot").lower()  # "spot" | "swap"
+KRAKEN_ENV             = env_str("KRAKEN_ENV", "mainnet").lower()         # "testnet" | "mainnet"
+KRAKEN_DEFAULT_TYPE    = env_str("KRAKEN_DEFAULT_TYPE", "spot").lower()   # "spot" | "swap"
 
 # Volume / micro-chunking (optionnel)
 BUY_SPLIT_CHUNKS       = max(1, env_int("BUY_SPLIT_CHUNKS", 2))       # ex: 3 -> 3 ordres par BUY
@@ -305,7 +305,8 @@ def _monitor_trailing(symbol: str, qty: float, entry_price: float, conf: int, ba
             t = ex.fetch_ticker(symbol)
             last = float(t.get("last") or t.get("close") or 0.0)
             if last <= 0:
-                time.sleep(3); continue
+                time.sleep(3)
+                continue
 
             if last <= initial_stop:
                 log.warning("[TRAIL] initial SL hit (%.2f <= %.2f) -> SELL", last, initial_stop)
@@ -409,11 +410,19 @@ def webhook():
             safe_payload.pop("token", None)
             log.info("Webhook payload: %s", json.dumps(safe_payload, ensure_ascii=False))
 
+            # Normalise symbole tôt (sert aussi pour PING)
+            symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
+
+            # Signal
             signal = (payload.get("signal") or "").upper()
+
+            # ► PING (sanity check)
+            if signal == "PING":
+                return jsonify({"ok": True, "pong": True, "symbol": symbol}), 200
+
             if signal not in {"BUY", "SELL"}:
                 return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
 
-            symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
             conf = int(payload.get("confidence") or payload.get("indicators_count") or 2)
             tp_pct, sl_pct = _tp_sl_from_confidence(conf)
 
@@ -426,7 +435,7 @@ def webhook():
                 if st.get("last_buy_ts", 0) and (now - st["last_buy_ts"] < BUY_COOL_SEC):
                     wait = BUY_COOL_SEC - (now - st["last_buy_ts"])
                     return jsonify({"ok": False, "reason": "buy_cooldown",
-                                     "cooldown_remaining_sec": int(wait)}), 200
+                                    "cooldown_remaining_sec": int(wait)}), 200
 
                 if st.get("has_position"):
                     return jsonify({"ok": False, "reason": "position_already_open"}), 200
@@ -434,7 +443,7 @@ def webhook():
                 requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
                 if requested_quote < MIN_QUOTE_PER_TRADE:
                     return jsonify({"error": "sizing_error",
-                                     "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"}), 400
+                                    "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"}), 400
 
                 # cap par réserve QUOTE
                 balances = ex.fetch_free_balance()
@@ -443,12 +452,12 @@ def webhook():
                 quote_to_use = min(requested_quote, usable_quote)
                 if quote_to_use <= 0:
                     return jsonify({"error": "Pas assez de QUOTE (réserve incluse)",
-                                     "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
+                                    "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
 
                 # Ajuste SL si RISK_PCT plus strict
                 if requested_quote * sl_pct > requested_quote * RISK_PCT:
                     log.warning("SL %.2f%% > RISK_PCT %.2f%% -> borné à RISK_PCT",
-                                 sl_pct*100, RISK_PCT*100)
+                                sl_pct*100, RISK_PCT*100)
                     sl_pct = RISK_PCT
 
                 if ORDER_TYPE != "market":
@@ -514,12 +523,12 @@ def webhook():
                                      daemon=True).start()
 
                 return jsonify({"ok": True,
-                                 "orders": orders,
-                                 "total_qty": total_qty,
-                                 "avg_price": vwap,
-                                 "tp_pct": tp_pct, "sl_pct": sl_pct,
-                                 "confidence": conf,
-                                 "trailing_enabled": TRAILING_ENABLED}), 200
+                                "orders": orders,
+                                "total_qty": total_qty,
+                                "avg_price": vwap,
+                                "tp_pct": tp_pct, "sl_pct": sl_pct,
+                                "confidence": conf,
+                                "trailing_enabled": TRAILING_ENABLED}), 200
 
             # ===== SELL =====
             force_close = bool(payload.get("force_close") or False)
@@ -547,7 +556,7 @@ def webhook():
             base_qty_to_sell = min(base_qty_to_sell, sellable)
             if base_qty_to_sell <= 0:
                 return jsonify({"error": "Pas de quantité base vendable (réserve incluse)",
-                                 "available_base": avail_base, "base_reserve": BASE_RESERVE}), 400
+                                "available_base": avail_base, "base_reserve": BASE_RESERVE}), 400
 
             if ORDER_TYPE != "market":
                 return jsonify({"error": "Cette version ne gère que market"}), 400
@@ -573,7 +582,7 @@ def webhook():
             if DRY_RUN:
                 _with_state(lambda s: s.update({"has_position": False, "last_qty": 0.0}))
                 return jsonify({"ok": True, "dry_run": True, "action": "SELL",
-                                 "symbol": symbol, "qty": base_qty_to_sell}), 200
+                                "symbol": symbol, "qty": base_qty_to_sell}), 200
 
             for i in range(sell_chunks):
                 q = chunk_qty if i < sell_chunks - 1 else remaining
@@ -599,7 +608,6 @@ def webhook():
                     break
 
             _with_state(lambda s: s.update({"has_position": False, "last_qty": 0.0}))
-
             return jsonify({"ok": True, "orders": orders, "sold_total": base_qty_to_sell}), 200
 
         except ccxt.InsufficientFunds as e:
@@ -621,22 +629,3 @@ _load_state()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "3000"))
     app.run(host="0.0.0.0", port=port)
-
-@app.post("/webhook")
-def webhook():
-    with _position_lock:
-        try:
-            payload = request.get_json(silent=True) or {}
-            # ... vérif secret ...
-
-            # Normalise le symbole tôt (sert aussi pour PING)
-            symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
-
-            signal = (payload.get("signal") or "").upper()
-
-            # ← AJOUT : accepter PING pour un “pong” 200 OK
-            if signal == "PING":
-                return jsonify({"ok": True, "pong": True, "symbol": symbol}), 200
-
-            if signal not in {"BUY", "SELL"}:
-                return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
