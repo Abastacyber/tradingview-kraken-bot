@@ -621,3 +621,22 @@ _load_state()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "3000"))
     app.run(host="0.0.0.0", port=port)
+
+@app.post("/webhook")
+def webhook():
+    with _position_lock:
+        try:
+            payload = request.get_json(silent=True) or {}
+            # ... vérif secret ...
+
+            # Normalise le symbole tôt (sert aussi pour PING)
+            symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
+
+            signal = (payload.get("signal") or "").upper()
+
+            # ← AJOUT : accepter PING pour un “pong” 200 OK
+            if signal == "PING":
+                return jsonify({"ok": True, "pong": True, "symbol": symbol}), 200
+
+            if signal not in {"BUY", "SELL"}:
+                return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
