@@ -410,19 +410,11 @@ def webhook():
             safe_payload.pop("token", None)
             log.info("Webhook payload: %s", json.dumps(safe_payload, ensure_ascii=False))
 
-            # Normalise symbole tôt (sert aussi pour PING)
-            symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
-
-            # Signal
             signal = (payload.get("signal") or "").upper()
-
-            # ► PING (sanity check)
-            if signal == "PING":
-                return jsonify({"ok": True, "pong": True, "symbol": symbol}), 200
-
             if signal not in {"BUY", "SELL"}:
                 return jsonify({"error": "signal invalide (BUY/SELL)"}), 400
 
+            symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
             conf = int(payload.get("confidence") or payload.get("indicators_count") or 2)
             tp_pct, sl_pct = _tp_sl_from_confidence(conf)
 
