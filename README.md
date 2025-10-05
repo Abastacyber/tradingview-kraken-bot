@@ -1,4 +1,4 @@
-# TradingView → Binance Bot (Render)
+# TradingView → Kraken Bot (Render)
 
 Flask app qui reçoit des webhooks TradingView et (en papier) calcule une qty selon un risque en EUR. Mapping BTC→USDT pour Binance.
 
