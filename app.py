@@ -43,24 +43,23 @@ MIN_QUOTE_PER_TRADE    = env_float("MIN_QUOTE_PER_TRADE", 10.0)      # garde-fou
 FEE_BUFFER_PCT         = env_float("FEE_BUFFER_PCT", 0.002)          # 0.2 %
 
 # réserves
-BASE_RESERVE           = env_float("BASE_RESERVE", 0.000005)
-QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 5.0)
+BASE_RESERVE           = env_float("BASE_RESERVE", 0.0)
+QUOTE_RESERVE          = env_float("QUOTE_RESERVE", 0.0)
 
 # gestion risque / SL
 RISK_PCT               = env_float("RISK_PCT", 0.02)     # max perte vs ticket (2%)
 MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05)   # SL dur max (5%)
 
-# cooldown achat (NB: c'est bien BUY_COOL_SEC que le code lit)
-BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
+# cooldown (accepte les 2 noms)
+BUY_COOL_SEC           = env_int("BUY_COOL_SEC", None)
+if BUY_COOL_SEC in (None, 0):
+    BUY_COOL_SEC = env_int("BUY_COOLDOWN_SEC", 300)  # fallback
 
-# sécurité / bac à sable
+# sécurité / dry-run
 DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
 # --- Secret compatible TradingView ---
 WEBHOOK_SECRET         = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))
-if not WEBHOOK_SECRET:
-    # Webhook ouvert (utile pour tests uniquement)
-    logging.warning("Aucun WEBHOOK_SECRET défini – webhook ouvert (OK pour tests)")
 
 # Trailing côté bot
 TRAILING_ENABLED         = env_str("TRAILING_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -69,7 +68,7 @@ TRAIL_GAP_CONF2          = env_float("TRAIL_GAP_CONF2",        0.002)   # 0.20 %
 TRAIL_ACTIVATE_PCT_CONF3 = env_float("TRAIL_ACTIVATE_PCT_CONF3", 0.006) # +0.60 %
 TRAIL_GAP_CONF3          = env_float("TRAIL_GAP_CONF3",        0.003)   # 0.30 %
 
-# Persistance d'état (simple fichier json)
+# Persistance d'état
 STATE_FILE             = env_str("STATE_FILE", "/tmp/bot_state.json")
 RESTORE_ON_START       = env_str("RESTORE_ON_START", "true").lower() in ("1", "true", "yes")
 
@@ -81,10 +80,10 @@ API_SECRET             = env_str("KRAKEN_API_SECRET", "")
 KRAKEN_ENV             = env_str("KRAKEN_ENV", "mainnet").lower()         # "testnet" | "mainnet"
 KRAKEN_DEFAULT_TYPE    = env_str("KRAKEN_DEFAULT_TYPE", "spot").lower()   # "spot" | "swap"
 
-# Volume / micro-chunking (optionnel)
-BUY_SPLIT_CHUNKS       = max(1, env_int("BUY_SPLIT_CHUNKS", 2))       # ex: 3 -> 3 ordres par BUY
-BUY_SPLIT_DELAY_MS     = max(0, env_int("BUY_SPLIT_DELAY_MS", 500))   # pause entre micro-ordres
-SELL_SPLIT_CHUNKS      = max(1, env_int("SELL_SPLIT_CHUNKS", 1))      # ex: 2 -> 2 ordres par SELL
+# Micro-chunking
+BUY_SPLIT_CHUNKS       = max(1, env_int("BUY_SPLIT_CHUNKS", 1))
+BUY_SPLIT_DELAY_MS     = max(0, env_int("BUY_SPLIT_DELAY_MS", 300))
+SELL_SPLIT_CHUNKS      = max(1, env_int("SELL_SPLIT_CHUNKS", 1))
 
 # ========= Logs =========
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
@@ -97,7 +96,7 @@ app = Flask(__name__)
 _state_lock = threading.Lock()
 _position_lock = threading.Lock()
 
-_state = {
+_state: Dict[str, Any] = {
     "has_position": False,
     "last_buy_ts": 0.0,
     "last_entry_price": 0.0,
@@ -138,15 +137,8 @@ def _assert_env():
         raise RuntimeError("KRAKEN_API_KEY / KRAKEN_API_SECRET manquants")
 
 def _normalize_to_ccxt_symbol(s: str) -> str:
-    """
-    Normalise un symbole éventuel en unified ccxt.
-    - supporte "XBT" -> "BTC"
-    - accepte "BTC/EUR", "btceur", "BTC-EUR"
-    - fallback sur SYMBOL_DEFAULT si on ne sait pas parser
-    """
     if not s:
         return SYMBOL_DEFAULT
-
     s = s.replace("-", "/").upper()
     if "/" not in s:
         for q in ("USDT", "USD", "USDC", "EUR", "BTC", "ETH"):
@@ -156,9 +148,8 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
                 break
         else:
             return SYMBOL_DEFAULT
-
     base, quote = s.split("/")
-    if base == "XBT":  # alias Kraken
+    if base == "XBT":
         base = "BTC"
     return f"{base}/{quote}"
 
@@ -167,7 +158,7 @@ def _make_exchange():
     ex = ccxt.kraken({
         "apiKey": API_KEY,
         "secret": API_SECRET,
-        "options": {"defaultType": KRAKEN_DEFAULT_TYPE},  # spot ou swap
+        "options": {"defaultType": KRAKEN_DEFAULT_TYPE},
         "enableRateLimit": True,
     })
     if KRAKEN_ENV in ("testnet", "sandbox", "demo", "paper", "true", "1", "yes"):
@@ -204,19 +195,17 @@ def _get_min_trade_info(ex, symbol: str, price: float) -> Tuple[float, float, Op
     if symbol not in markets:
         raise RuntimeError(f"Symbole inconnu côté exchange: {symbol}")
     m = markets[symbol]
-
     limits = m.get("limits") or {}
     min_amount = float((limits.get("amount") or {}).get("min") or 0.0)
     min_cost   = float((limits.get("cost")   or {}).get("min") or 0.0)
     step       = _amount_step_from_market(m)
 
-    # Sanitize min_amount aberrant (ex: 1 BTC -> absurde en spot)
+    # Sanitize min_amount aberrant
     if min_amount and price and (min_amount * price) > 200:
         base = symbol.split("/")[0]
         log.warning("Ignoring absurd min_amount=%s %s (~%.2f %s) – using qtyStep/minCost instead",
                     min_amount, base, min_amount*price, symbol.split("/")[1])
         min_amount = 0.0
-
     return min_amount, min_cost, step
 
 def _round_floor(value: float, step: float) -> float:
@@ -231,8 +220,8 @@ def _to_exchange_precision(ex, symbol: str, amount: float) -> float:
         return amount
 
 def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[float, float]:
-    """Retourne (qty_base_arrondie, prix) pour convertir un montant QUOTE -> BASE,
-       en respectant minCost / minAmount / qtyStep, avec sanitation.
+    """Retourne (qty_base_arrondie, prix) pour convertir QUOTE -> BASE,
+       en respectant minCost / minAmount / qtyStep.
     """
     t = ex.fetch_ticker(symbol)
     price = float(t.get("last") or t.get("close") or t.get("ask") or t.get("bid") or 0.0)
@@ -277,7 +266,6 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     return qty, price
 
 def _tp_sl_from_confidence(conf: int) -> Tuple[float, float]:
-    # (tp_pct, sl_pct) — ici non exploité par des ordres limites, conservé pour logs/monitor
     return (0.008, 0.005) if conf >= 3 else (0.003, 0.002)
 
 def _trail_params(conf: int) -> Tuple[float, float]:
@@ -289,9 +277,7 @@ def _trail_params(conf: int) -> Tuple[float, float]:
 def _monitor_trailing(symbol: str, qty: float, entry_price: float, conf: int, base_sl_pct: float):
     if not TRAILING_ENABLED or qty <= 0:
         return
-
     ex = _make_exchange()
-
     activate_pct, gap = _trail_params(conf)
     max_price = entry_price
     base_sl_pct = min(base_sl_pct, MAX_SL_PCT)
@@ -312,10 +298,11 @@ def _monitor_trailing(symbol: str, qty: float, entry_price: float, conf: int, ba
             if last <= initial_stop:
                 log.warning("[TRAIL] initial SL hit (%.2f <= %.2f) -> SELL", last, initial_stop)
                 try:
-                    min_amount, _, step = _get_min_trade_info(ex, symbol, last)
+                    _, _, step = _get_min_trade_info(ex, symbol, last)
                     qty_to_sell = _round_floor(qty, step) if step else qty
                     qty_to_sell = _to_exchange_precision(ex, symbol, qty_to_sell)
-                    ex.create_market_sell_order(symbol, qty_to_sell)
+                    if not DRY_RUN:
+                        ex.create_market_sell_order(symbol, qty_to_sell)
                 except Exception as e:
                     log.warning("[TRAIL] SELL initial failed: %s", e)
                 _with_state(lambda s: s.update({"has_position": False}))
@@ -332,10 +319,11 @@ def _monitor_trailing(symbol: str, qty: float, entry_price: float, conf: int, ba
                 if last <= trail_stop:
                     log.info("[TRAIL] stop hit %.2f <= %.2f -> SELL", last, trail_stop)
                     try:
-                        min_amount, _, step = _get_min_trade_info(ex, symbol, last)
+                        _, _, step = _get_min_trade_info(ex, symbol, last)
                         qty_to_sell = _round_floor(qty, step) if step else qty
                         qty_to_sell = _to_exchange_precision(ex, symbol, qty_to_sell)
-                        ex.create_market_sell_order(symbol, qty_to_sell)
+                        if not DRY_RUN:
+                            ex.create_market_sell_order(symbol, qty_to_sell)
                     except Exception as e:
                         log.warning("[TRAIL] SELL failed: %s", e)
                     _with_state(lambda s: s.update({"has_position": False}))
@@ -387,6 +375,34 @@ def debug_limits():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.get("/debug/min_quote_required")
+def debug_min_quote_required():
+    """Renvoie l'EUR minimum approximatif requis pour un BUY sur le symbole donné."""
+    try:
+        symbol = _normalize_to_ccxt_symbol(request.args.get("symbol") or SYMBOL_DEFAULT)
+        ex = _make_exchange()
+        t = ex.fetch_ticker(symbol)
+        price = float(t.get("last") or t.get("close") or t.get("ask") or t.get("bid") or 0.0)
+        if price <= 0:
+            return jsonify({"error": "prix invalide"}), 500
+        min_amount, min_cost, step = _get_min_trade_info(ex, symbol, price)
+        required_quote = max(min_cost, (min_amount or 0) * price)
+        if step:
+            # min quantité d’un step
+            required_quote = max(required_quote, (step * price))
+        required_quote *= (1.0 + FEE_BUFFER_PCT)
+        return jsonify({
+            "symbol": symbol,
+            "approx_min_quote": round(required_quote, 4),
+            "currency": symbol.split("/")[1],
+            "price": price,
+            "min_amount": min_amount,
+            "min_cost": min_cost,
+            "step": step
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.post("/webhook")
 def webhook():
     # Un seul passage à la fois (surtout pour le SELL)
@@ -402,28 +418,28 @@ def webhook():
                        or request.args.get("token")
                        or request.headers.get("X-Webhook-Token"))
                 if tok != WEBHOOK_SECRET:
-                    log.warning("tv-kraken: Webhook: secret invalide")
+                    log.warning("Webhook: secret invalide")
                     return jsonify({"error": "unauthorized"}), 401
 
             # Log sans secret
             safe_payload = dict(payload)
             safe_payload.pop("secret", None)
             safe_payload.pop("token", None)
-            log.info("tv-kraken: Webhook payload: %s", json.dumps(safe_payload, ensure_ascii=False))
+            log.info("Webhook payload: %s", json.dumps(safe_payload, ensure_ascii=False))
 
             signal = (payload.get("signal") or "").upper()
 
-            # Support PING de test
+            # PING de test
             if signal == "PING":
                 return jsonify({"ok": True, "pong": True, "ts": int(time.time())}), 200
 
             if signal not in {"BUY", "SELL"}:
+                log.info("Webhook refused: signal invalide")
                 return jsonify({"error": "signal invalide (BUY/SELL/PING)"}), 400
 
             symbol = _normalize_to_ccxt_symbol(payload.get("symbol") or _state.get("symbol", SYMBOL_DEFAULT))
             conf = int(payload.get("confidence") or payload.get("indicators_count") or 2)
             tp_pct, sl_pct = _tp_sl_from_confidence(conf)
-
             ex = _make_exchange()
 
             # ===== BUY =====
@@ -432,36 +448,38 @@ def webhook():
                 st = dict(_state)
                 if st.get("last_buy_ts", 0) and (now - st["last_buy_ts"] < BUY_COOL_SEC):
                     wait = BUY_COOL_SEC - (now - st["last_buy_ts"])
-                    return jsonify({"ok": False, "reason": "buy_cooldown",
-                                    "cooldown_remaining_sec": int(wait)}), 200
+                    msg = f"buy_cooldown: {int(wait)}s restants"
+                    log.info(msg)
+                    return jsonify({"ok": False, "reason": "buy_cooldown", "cooldown_remaining_sec": int(wait)}), 200
 
                 if st.get("has_position"):
+                    log.info("BUY ignoré: position déjà ouverte")
                     return jsonify({"ok": False, "reason": "position_already_open"}), 200
 
                 requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
                 if requested_quote < MIN_QUOTE_PER_TRADE:
-                    return jsonify({"error": "sizing_error",
-                                    "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"}), 400
+                    msg = f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"
+                    log.info(msg)
+                    return jsonify({"error": "sizing_error", "detail": msg}), 400
 
-                # cap par réserve QUOTE
+                # Cap par réserve QUOTE
                 balances = ex.fetch_free_balance()
                 avail_quote = float(balances.get(QUOTE_SYMBOL, 0.0))
                 usable_quote = max(0.0, avail_quote - QUOTE_RESERVE)
                 quote_to_use = min(requested_quote, usable_quote)
                 if quote_to_use <= 0:
-                    return jsonify({"error": "Pas assez de QUOTE (réserve incluse)",
-                                    "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
+                    msg = f"Pas assez de QUOTE ({QUOTE_SYMBOL}) dispo (réserve incluse). Dispo={avail_quote}, reserve={QUOTE_RESERVE}"
+                    log.info(msg)
+                    return jsonify({"error": "no_funds", "detail": msg, "available": avail_quote, "quote_reserve": QUOTE_RESERVE}), 400
 
                 # Ajuste SL si RISK_PCT plus strict
                 if requested_quote * sl_pct > requested_quote * RISK_PCT:
-                    log.warning("SL %.2f%% > RISK_PCT %.2f%% -> borné à RISK_PCT",
-                                sl_pct*100, RISK_PCT*100)
+                    log.warning("SL %.2f%% > RISK_PCT %.2f%% -> borné à RISK_PCT", sl_pct*100, RISK_PCT*100)
                     sl_pct = RISK_PCT
 
                 if ORDER_TYPE != "market":
                     return jsonify({"error": "Cette version ne gère que market"}), 400
 
-                # --- Micro-chunking ---
                 chunks = max(1, min(BUY_SPLIT_CHUNKS, 10))
                 per_chunk_quote = quote_to_use / chunks
 
@@ -478,10 +496,11 @@ def webhook():
                             base_qty, price = _compute_base_qty_for_quote(ex, symbol, quote_to_use)
                             chunks = 1
                         else:
-                            raise
+                            log.info("BUY sizing error: %s", e)
+                            return jsonify({"error": "sizing_error", "detail": str(e)}), 400
 
-                    # arrondis finaux avant ordre
-                    min_amount, _, step = _get_min_trade_info(ex, symbol, price)
+                    # Arrondis finaux avant ordre
+                    _, _, step = _get_min_trade_info(ex, symbol, price)
                     if step:
                         base_qty = _round_floor(base_qty, step)
                     base_qty = _to_exchange_precision(ex, symbol, base_qty)
@@ -516,114 +535,86 @@ def webhook():
                 }))
 
                 if TRAILING_ENABLED and total_qty > 0:
-                    threading.Thread(target=_monitor_trailing,
-                                     args=(symbol, total_qty, vwap, conf, sl_pct),
-                                     daemon=True).start()
+                    threading.Thread(
+                        target=_monitor_trailing,
+                        args=(symbol, total_qty, vwap, conf, sl_pct),
+                        daemon=True
+                    ).start()
 
-                return jsonify({"ok": True,
-                                "orders": orders,
-                                "total_qty": total_qty,
-                                "avg_price": vwap,
-                                "tp_pct": tp_pct, "sl_pct": sl_pct,
-                                "confidence": conf,
-                                "trailing_enabled": TRAILING_ENABLED}), 200
+                return jsonify({
+                    "ok": True,
+                    "action": "BUY",
+                    "symbol": symbol,
+                    "qty": total_qty,
+                    "avg_price": vwap,
+                    "orders": orders,
+                }), 200
 
             # ===== SELL =====
-            force_close = bool(payload.get("force_close") or False)
-            qty_override = payload.get("qty_base")
-            balances = ex.fetch_free_balance()
-            base_code = symbol.split("/")[0]
-            avail_base = float(balances.get(base_code, 0.0))
-            sellable = max(0.0, avail_base - BASE_RESERVE)
+            if signal == "SELL":
+                st = dict(_state)
+                symbol = _normalize_to_ccxt_symbol(st.get("symbol") or symbol)
+                balances = _make_exchange().fetch_free_balance()  # separate client to be safe
+                base_ccy = symbol.split("/")[0]
+                ex = _make_exchange()
 
-            if force_close:
-                base_qty_to_sell = sellable
-            elif qty_override is not None:
-                try:
-                    base_qty_to_sell = float(qty_override)
-                except Exception:
-                    return jsonify({"error": "qty_base invalide"}), 400
-            else:
-                requested_quote = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
-                try:
-                    base_qty_to_sell, price = _compute_base_qty_for_quote(ex, symbol, requested_quote)
-                except Exception as e:
-                    log.warning("Sizing error SELL: %s", e)
-                    return jsonify({"error": "sizing_error", "detail": str(e)}), 400
+                force_close = bool(payload.get("force_close", True))
+                qty_hint = float(payload.get("qty") or 0.0)
 
-            base_qty_to_sell = min(base_qty_to_sell, sellable)
-            if base_qty_to_sell <= 0:
-                return jsonify({"error": "Pas de quantité base vendable (réserve incluse)",
-                                "available_base": avail_base, "base_reserve": BASE_RESERVE}), 400
+                # Quantité à vendre
+                if force_close:
+                    avail_base = float(balances.get(base_ccy, 0.0))
+                    qty_to_sell = max(0.0, avail_base - BASE_RESERVE)
+                    if qty_to_sell <= 0:
+                        msg = f"Aucune quantité {base_ccy} disponible pour SELL"
+                        log.info(msg)
+                        return jsonify({"ok": False, "reason": "no_position", "detail": msg}), 200
+                else:
+                    # vends la qty mémorisée (ou qty_hint si fourni)
+                    qty_to_sell = qty_hint if qty_hint > 0 else float(st.get("last_qty") or 0.0)
+                    if qty_to_sell <= 0:
+                        msg = "Quantité SELL inconnue; utilisez force_close=true ou fournissez 'qty'"
+                        log.info(msg)
+                        return jsonify({"error": "sizing_error", "detail": msg}), 400
 
-            if ORDER_TYPE != "market":
-                return jsonify({"error": "Cette version ne gère que market"}), 400
-
-            # Split SELL si demandé
-            sell_chunks = max(1, min(SELL_SPLIT_CHUNKS, 10))
-            min_amount, _, step = _get_min_trade_info(ex, symbol, float(ex.fetch_ticker(symbol).get("last") or 0.0))
-            chunk_qty = base_qty_to_sell / sell_chunks
-            if step:
-                chunk_qty = _round_floor(chunk_qty, step)
-
-            # si le chunk devient trop petit, fallback en 1
-            if (min_amount and chunk_qty < min_amount) or chunk_qty <= 0:
-                sell_chunks = 1
-                chunk_qty = base_qty_to_sell
-
-            orders = []
-            remaining = base_qty_to_sell
-
-            log.info("SELL %s total=%.8f (chunks=%d, chunk_qty≈%.8f, avail=%.8f, reserve=%.8f)",
-                     symbol, base_qty_to_sell, sell_chunks, chunk_qty, avail_base, BASE_RESERVE)
-
-            if DRY_RUN:
-                _with_state(lambda s: s.update({"has_position": False, "last_qty": 0.0}))
-                return jsonify({"ok": True, "dry_run": True, "action": "SELL",
-                                "symbol": symbol, "qty": base_qty_to_sell}), 200
-
-            for i in range(sell_chunks):
-                q = chunk_qty if i < sell_chunks - 1 else remaining
+                # Respect du step
+                t = ex.fetch_ticker(symbol)
+                price = float(t.get("last") or t.get("close") or t.get("bid") or 0.0)
+                _, _, step = _get_min_trade_info(ex, symbol, price)
                 if step:
-                    q = _round_floor(q, step)
-                q = _to_exchange_precision(ex, symbol, q)
-                if q <= 0:
-                    continue
-                try:
-                    order = ex.create_market_sell_order(symbol, q)
-                    orders.append(order)
-                    remaining -= q
-                except Exception as e:
-                    log.warning("SELL chunk %d failed: %s", i+1, e)
-                    if sell_chunks > 1 and remaining > 0:
-                        try:
-                            q2 = _to_exchange_precision(ex, symbol, remaining)
-                            order = ex.create_market_sell_order(symbol, q2)
-                            orders.append(order)
-                            remaining = 0
-                        except Exception as e2:
-                            log.warning("SELL fallback failed: %s", e2)
-                    break
+                    qty_to_sell = _round_floor(qty_to_sell, step)
+                qty_to_sell = _to_exchange_precision(ex, symbol, qty_to_sell)
 
-            _with_state(lambda s: s.update({"has_position": False, "last_qty": 0.0}))
-            return jsonify({"ok": True, "orders": orders, "sold_total": base_qty_to_sell}), 200
+                log.info("SELL %s qty=%.8f (force_close=%s)", symbol, qty_to_sell, force_close)
 
-        except ccxt.InsufficientFunds as e:
-            log.warning("InsufficientFunds: %s", e)
-            return jsonify({"error": "InsufficientFunds", "detail": str(e)}), 400
-        except ccxt.NetworkError as e:
-            log.exception("NetworkError")
-            return jsonify({"error": "NetworkError", "detail": str(e)}), 503
+                order = {"dry_run": True} if DRY_RUN else ex.create_market_sell_order(symbol, qty_to_sell)
+
+                _with_state(lambda s: s.update({
+                    "has_position": False,
+                    "last_qty": 0.0
+                }))
+
+                return jsonify({
+                    "ok": True,
+                    "action": "SELL",
+                    "symbol": symbol,
+                    "qty": qty_to_sell,
+                    "order": order
+                }), 200
+
+            # Impossible d'arriver ici
+            return jsonify({"error": "unknown"}), 400
+
         except ccxt.BaseError as e:
-            log.exception("ExchangeError")
-            return jsonify({"error": "ExchangeError", "detail": str(e)}), 502
+            log.exception("CCXT error")
+            return jsonify({"error": "ccxt_error", "detail": str(e)}), 500
         except Exception as e:
-            log.exception("Erreur serveur")
-            return jsonify({"error": str(e)}), 500
+            log.exception("Server error")
+            return jsonify({"error": "server_error", "detail": str(e)}), 500
 
-# ========= Boot =========
-_load_state()
-
+# ========= Start =========
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "3000"))
-    app.run(host="0.0.0.0", port=port)
+    _load_state()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+else:
+    _load_state()
