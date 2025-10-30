@@ -1,4 +1,3 @@
-# app.py
 from __future__ import annotations
 
 import os
@@ -11,9 +10,7 @@ from typing import Any, Dict, Tuple, Optional
 from flask import Flask, request, jsonify
 import ccxt  # type: ignore
 
-# =============================================================================
-# Logging
-# =============================================================================
+# ───────────────────────── Logging ─────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -21,9 +18,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("tv-kraken")
 
-# =============================================================================
-# Helpers ENV
-# =============================================================================
+# ───────────────────────── Helpers ENV ─────────────────────────
 def env_str(name: str, default: Optional[str] = None) -> str:
     v = os.getenv(name, default)
     if v is None:
@@ -48,34 +43,36 @@ def env_bool(name: str, default: bool = False) -> bool:
         return default
     return v.strip().lower() in ("1", "true", "yes", "y", "on")
 
-# =============================================================================
-# Config
-# =============================================================================
-EXCHANGE_NAME  = env_str("EXCHANGE", "kraken").lower()          # kraken
-BASE_SYMBOL    = env_str("BASE_SYMBOL", "BTC").upper()          # ex: BTC
-QUOTE_SYMBOL   = env_str("QUOTE_SYMBOL", "EUR").upper()         # ex: EUR
-SYMBOL         = env_str("SYMBOL", f"{BASE_SYMBOL}/{QUOTE_SYMBOL}").upper()
-ORDER_TYPE     = env_str("ORDER_TYPE", "market").lower()        # market only
+# ───────────────────────── Config ─────────────────────────
+EXCHANGE_NAME  = env_str("EXCHANGE", "kraken").lower()
+BASE_SYMBOL    = env_str("BASE_SYMBOL", "BTC").upper()
+QUOTE_SYMBOL   = env_str("QUOTE_SYMBOL", "USDT").upper()
+SYMBOL_ENV     = env_str("SYMBOL", f"{BASE_SYMBOL}/{QUOTE_SYMBOL}").upper()
 
-# sizing
-FIXED_QUOTE_PER_TRADE = env_float("FIXED_QUOTE_PER_TRADE", 10.0)  # € à dépenser par BUY
-MIN_QUOTE_PER_TRADE   = env_float("MIN_QUOTE_PER_TRADE",   10.0)  # garde-fou
-FEE_BUFFER_PCT        = env_float("FEE_BUFFER_PCT",        0.002) # 0.2%
-QUOTE_RESERVE         = env_float("QUOTE_RESERVE",         0.0)   # € à laisser
+ORDER_TYPE     = env_str("ORDER_TYPE", "market").lower()
 
-# risk (valeurs dispo si tu veux les exploiter ensuite)
-RISK_PCT   = env_float("RISK_PCT",   0.01)
-MAX_SL_PCT = env_float("MAX_SL_PCT", 0.05)
+# sizing / coûts
+FIXED_QUOTE_PER_TRADE = env_float("FIXED_QUOTE_PER_TRADE", 10.0)
+MIN_QUOTE_PER_TRADE   = env_float("MIN_QUOTE_PER_TRADE", 10.0)
+FEE_BUFFER_PCT        = env_float("FEE_BUFFER_PCT", 0.002)
+
+# réserves
+BASE_RESERVE          = env_float("BASE_RESERVE", 0.0)     # garde une petite qty base
+QUOTE_RESERVE         = env_float("QUOTE_RESERVE", 0.0)    # garde une petite qty quote
+
+# gestion risque / SL (infos log uniquement ici)
+RISK_PCT              = env_float("RISK_PCT", 0.02)
+MAX_SL_PCT            = env_float("MAX_SL_PCT", 0.05)
 
 # cooldown achat
-BUY_COOL_SEC = env_int("BUY_COOL_SEC", 180)
+BUY_COOL_SEC          = env_int("BUY_COOL_SEC", 300)
 
-# modes
-DRY_RUN          = env_bool("DRY_RUN", False)
-RESTORE_ON_START = env_bool("RESTORE_ON_START", True)
-STATE_FILE       = env_str("STATE_FILE", "/tmp/bot_state.json")
+# sandbox & état
+DRY_RUN               = env_bool("DRY_RUN", False)
+RESTORE_ON_START      = env_bool("RESTORE_ON_START", True)
+STATE_FILE            = env_str("STATE_FILE", "/tmp/bot_state.json")
 
-# trailing (non utilisé pour passer ordre, mais conservé en config)
+# Trailing (valeurs exposées dans les logs, pas d’ordres auto ici)
 TRAILING_ENABLED         = env_bool("TRAILING_ENABLED", True)
 TRAIL_ACTIVATE_PCT_CONF2 = env_float("TRAIL_ACTIVATE_PCT_CONF2", 0.003)
 TRAIL_ACTIVATE_PCT_CONF3 = env_float("TRAIL_ACTIVATE_PCT_CONF3", 0.005)
@@ -83,308 +80,448 @@ TRAIL_GAP_CONF2          = env_float("TRAIL_GAP_CONF2", 0.0004)
 TRAIL_GAP_CONF3          = env_float("TRAIL_GAP_CONF3", 0.003)
 
 # sécu API / webhook
-WEBHOOK_SECRET    = env_str("WEBHOOK_SECRET", "")
-KRAKEN_API_KEY    = os.getenv("KRAKEN_API_KEY", "")
-KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET", "")
+WEBHOOK_SECRET        = env_str("WEBHOOK_SECRET", "")
+KRAKEN_API_KEY        = os.getenv("KRAKEN_API_KEY", "")
+KRAKEN_API_SECRET     = os.getenv("KRAKEN_API_SECRET", "")
 
-# =============================================================================
-# State (persistant simple)
-# =============================================================================
-DEFAULT_STATE: Dict[str, Any] = {
+# option sandbox
+KRAKEN_ENV            = os.getenv("KRAKEN_ENV", "mainnet").lower()  # "mainnet" | "testnet"
+
+# ───────────────────────── State persistence ─────────────────────────
+_DEFAULT_STATE: Dict[str, Any] = {
     "last_buy_ts": 0.0,
     "last_signal": None,
 }
+
 def load_state() -> Dict[str, Any]:
     if RESTORE_ON_START and os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 s = json.load(f)
                 if isinstance(s, dict):
-                    s = {**DEFAULT_STATE, **s}
-                    log.info("State restauré depuis %s", STATE_FILE)
+                    s = {**_DEFAULT_STATE, **s}
+                    log.info("STATE restauré depuis %s", STATE_FILE)
                     return s
         except Exception as e:
-            log.warning("Impossible de charger le state (%s), on repart clean.", e)
-    return dict(DEFAULT_STATE)
+            log.warning("STATE load error (%s), reset.", e)
+    return dict(_DEFAULT_STATE)
 
 def save_state(state: Dict[str, Any]) -> None:
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f)
     except Exception as e:
-        log.warning("Impossible d'écrire le state: %s", e)
+        log.warning("STATE save error: %s", e)
 
 STATE = load_state()
 
-# =============================================================================
-# Exchange init
-# =============================================================================
+# ───────────────────────── Exchange init ─────────────────────────
 if EXCHANGE_NAME != "kraken":
-    raise RuntimeError("Cette version supporte Kraken (spot).")
+    raise RuntimeError("Cette version supporte Kraken (spot) uniquement.")
 
-kraken_kwargs = {
+ex_kwargs = {
     "apiKey": KRAKEN_API_KEY or "",
     "secret": KRAKEN_API_SECRET or "",
     "enableRateLimit": True,
     "options": {"adjustForTimeDifference": True},
 }
-exchange = ccxt.kraken(kraken_kwargs)
-exchange.load_markets()
+exchange = ccxt.kraken(ex_kwargs)
+if KRAKEN_ENV in ("testnet", "sandbox", "paper", "true", "1", "yes"):
+    try:
+        exchange.set_sandbox_mode(True)
+    except Exception:
+        pass
 
-if SYMBOL not in exchange.markets:
-    raise RuntimeError(f"Symbole inconnu sur Kraken : {SYMBOL}")
+markets = exchange.load_markets()
 
-market = exchange.market(SYMBOL)         # dict marché ccxt
-amount_prec = market.get("precision", {}).get("amount")  # ex: 8
-min_cost = (market.get("limits", {}) or {}).get("cost", {}).get("min")
-
-# =============================================================================
-# Utils
-# =============================================================================
-def round_amount(amount: float) -> float:
-    """Arrondi l'amount base selon la précision de lot du marché."""
-    if amount_prec is None:
-        return amount
-    step = 10 ** (-amount_prec)
-    return math.floor(amount / step) * step
-
-def fetch_balances() -> Tuple[float, float]:
+# ───────────────────────── Utils & market helpers ─────────────────────────
+def normalize_symbol(s: str) -> str:
     """
-    Retourne (base_free, quote_free) en codes ccxt normalisés.
-    ccxt normalise les devises Kraken (EUR, BTC, ETH, SOL, etc.).
+    Accepte 'btc-eur', 'BTCEUR', 'BTC/EUR', et mappe XBT->BTC.
     """
+    if not s:
+        return SYMBOL_ENV
+    s = s.replace("-", "/").upper()
+    if "/" not in s:
+        # essaie d’inférer le séparateur
+        for q in ("USDT", "USDC", "USD", "EUR", "BTC", "ETH"):
+            if s.endswith(q):
+                base = s[:-len(q)]
+                s = f"{base}/{q}"
+                break
+        else:
+            return SYMBOL_ENV
+    base, quote = s.split("/")
+    if base == "XBT":  # alias Kraken
+        base = "BTC"
+    return f"{base}/{quote}"
+
+def ensure_market(symbol: str) -> Dict[str, Any]:
+    if symbol not in markets:
+        raise RuntimeError(f"Symbole inconnu sur Kraken: {symbol}")
+    return markets[symbol]
+
+def amount_precision(symbol: str) -> Optional[int]:
+    m = ensure_market(symbol)
+    prec = (m.get("precision") or {}).get("amount")
+    return int(prec) if prec is not None else None
+
+def round_amount(symbol: str, amount: float) -> float:
+    p = amount_precision(symbol)
+    if p is None:
+        return float(amount)
+    step = 10 ** (-p)
+    return math.floor(float(amount) / step) * step
+
+def market_limits(symbol: str) -> Tuple[float, float]:
+    """
+    Retourne (min_amount, min_cost) si disponibles, sinon (0.0, 0.0).
+    """
+    m = ensure_market(symbol)
+    limits = m.get("limits") or {}
+    min_amount = float((limits.get("amount") or {}).get("min") or 0.0)
+    min_cost   = float((limits.get("cost") or {}).get("min") or 0.0)
+    return (min_amount, min_cost)
+
+def fetch_balances(symbol: Optional[str] = None) -> Tuple[float, float]:
+    """
+    Retourne (base_free, quote_free) pour le symbole donné (ccxt normalisé).
+    """
+    sym = normalize_symbol(symbol or SYMBOL_ENV)
+    m = ensure_market(sym)
+    base = m["base"]    # ex: SOL
+    quote = m["quote"]  # ex: EUR
+
     bal = exchange.fetch_balance()
-    base_free = float(bal.get(BASE_SYMBOL, {}).get("free", 0.0))
-    quote_free = float(bal.get(QUOTE_SYMBOL, {}).get("free", 0.0))
+    base_free = float((bal.get(base) or {}).get("free") or 0.0)
+    quote_free = float((bal.get(quote) or {}).get("free") or 0.0)
     return base_free, quote_free
 
-def compute_buy_amount(last_price: float, quote_override: Optional[float] = None) -> Tuple[float, float]:
+def fetch_price(symbol: str) -> Tuple[float, float, float]:
     """
-    Calcule (quote_to_spend, base_amount arrondi).
+    Retourne (last, bid, ask) si dispo, sinon 0.0.
     """
-    _, quote_free = fetch_balances()
+    t = exchange.fetch_ticker(symbol)
+    last = float(t.get("last") or t.get("close") or 0.0)
+    bid  = float(t.get("bid")  or 0.0)
+    ask  = float(t.get("ask")  or 0.0)
+    return last, bid, ask
+
+# ───────────────────────── Sizing BUY/SELL ─────────────────────────
+def compute_buy_amount(symbol: str, last_price: float, quote_override: Optional[float]) -> Tuple[float, float]:
+    """
+    Calcule (spend_quote, base_amount arrondi). Applique réserves, min_cost/min_amount et buffer.
+    """
+    _, quote_free = fetch_balances(symbol)
+
+    # max dépensable (réserve)
+    usable_quote = max(0.0, quote_free - max(0.0, QUOTE_RESERVE))
+    usable_quote *= (1.0 - FEE_BUFFER_PCT)
+
+    # montant cible
+    spend = float(quote_override) if (quote_override and quote_override > 0) else float(FIXED_QUOTE_PER_TRADE)
+
+    # bornes locales
+    spend = max(spend, 0.0)
+    spend = min(spend, usable_quote)
+    if spend < MIN_QUOTE_PER_TRADE:
+        # si pas assez, on signale
+        return (0.0, 0.0)
+
+    min_amount, min_cost = market_limits(symbol)
+    if min_cost and spend < min_cost:
+        spend = min_cost  # on relève au minimum d’order notional
+
     if last_price <= 0:
-        return 0.0, 0.0
+        return (0.0, 0.0)
 
-    # budget de départ
-    spend = FIXED_QUOTE_PER_TRADE if quote_override is None else float(quote_override)
+    base_amt = spend / last_price
+    # respecte min_amount si présent
+    if min_amount and base_amt < min_amount:
+        base_amt = min_amount
 
-    # bornes
-    spend = max(spend, MIN_QUOTE_PER_TRADE)
-    # réserve + buffer frais
-    max_spend = max(0.0, quote_free - QUOTE_RESERVE) * (1.0 - FEE_BUFFER_PCT)
-    spend = min(spend, max_spend)
-
-    # min cost de l'exchange si dispo
-    if isinstance(min_cost, (int, float)) and min_cost > 0:
-        spend = max(spend, float(min_cost))
-
-    if spend <= 0:
-        return 0.0, 0.0
-
-    base_amt = round_amount(spend / last_price)
+    base_amt = round_amount(symbol, base_amt)
+    # Re-valide après arrondi
     if base_amt <= 0:
-        return 0.0, 0.0
+        return (0.0, 0.0)
 
-    return spend, base_amt
+    return (spend, base_amt)
 
-def enough_to_sell(min_amt: float = 0.0) -> Tuple[bool, float]:
-    """Dispo base ? Renvoie (ok, base_free)."""
-    base_free, _ = fetch_balances()
-    if min_amt <= 0:
-        # seuil mini très petit selon précision
-        p = amount_prec if amount_prec is not None else 8
-        min_amt = 10 ** (-p)
-    return (base_free >= min_amt), base_free
+def compute_sell_amount(symbol: str, last_price: float, amount_base: Optional[float], quote_override: Optional[float]) -> float:
+    """
+    Retourne la quantité BASE à vendre (arrondie) selon:
+      - amount_base (prioritaire) ou
+      - quote_override converti en base, ou
+      - tout le 'free' (moins réserve).
+    """
+    base_free, _ = fetch_balances(symbol)
+    sellable = max(0.0, base_free - max(0.0, BASE_RESERVE))
 
-def place_order(side: str, amount_base: float, symbol: str = SYMBOL) -> Dict[str, Any]:
-    if DRY_RUN:
-        log.info("DRY_RUN %s %s %s", side.upper(), amount_base, symbol)
-        return {"dry_run": True, "side": side, "amount": amount_base, "symbol": symbol}
+    if amount_base and amount_base > 0:
+        qty = min(float(amount_base), sellable)
+    elif quote_override and quote_override > 0 and last_price > 0:
+        qty = min(float(quote_override)/last_price, sellable)
+    else:
+        qty = sellable
 
+    qty = round_amount(symbol, qty)
+
+    # Respect min_amount si dispo
+    min_amount, _ = market_limits(symbol)
+    if min_amount and qty > 0 and qty < min_amount:
+        # si on n'atteint pas, on tente de relèver au mini dans la limite du sellable
+        qty = min_amount if sellable >= min_amount else 0.0
+
+    return float(qty)
+
+# ───────────────────────── Orders ─────────────────────────
+def place_market_order(symbol: str, side: str, amount_base: float) -> Dict[str, Any]:
     if amount_base <= 0:
-        raise RuntimeError("Amount <= 0")
+        raise RuntimeError("amount_base <= 0")
 
     if ORDER_TYPE != "market":
         raise RuntimeError("Cette version ne gère que 'market'")
 
+    if DRY_RUN:
+        log.info("DRY_RUN %s %s %s", side.upper(), amount_base, symbol)
+        return {"dry_run": True, "side": side, "amount": amount_base, "symbol": symbol}
+
     if side.lower() == "buy":
-        return exchange.create_market_buy_order(symbol, amount_base)   # amount en BASE
+        return exchange.create_market_buy_order(symbol, amount_base)
     elif side.lower() == "sell":
         return exchange.create_market_sell_order(symbol, amount_base)
     else:
-        raise RuntimeError("Side inconnu")
+        raise RuntimeError("Side inconnu (buy/sell)")
 
-def get_last_price(symbol: str = SYMBOL) -> float:
-    try:
-        t = exchange.fetch_ticker(symbol)
-        price = float(t.get("last") or t.get("close") or 0.0)
-        if price > 0:
-            return price
-    except Exception:
-        pass
-    # fallback orderbook
-    try:
-        ob = exchange.fetch_order_book(symbol, limit=5)
-        bid = float(ob["bids"][0][0]) if ob["bids"] else 0.0
-        ask = float(ob["asks"][0][0]) if ob["asks"] else 0.0
-        return ask or bid or 0.0
-    except Exception:
-        return 0.0
-
-# =============================================================================
-# Flask
-# =============================================================================
+# ───────────────────────── Flask ─────────────────────────
 app = Flask(__name__)
 
-@app.get("/health")
-def health() -> Any:
-    return {
-        "ok": True,
-        "exchange": EXCHANGE_NAME,
-        "symbol": SYMBOL,
-        "order_type": ORDER_TYPE,
-        "dry_run": DRY_RUN,
-    }, 200
-
-@app.get("/balance")
-def balance() -> Any:
-    base_free, quote_free = fetch_balances()
-    return {
-        "ok": True,
-        "base": BASE_SYMBOL,
-        "base_free": base_free,
-        "quote": QUOTE_SYMBOL,
-        "quote_free": quote_free,
-    }, 200
-
-@app.get("/price")
-def price() -> Any:
-    return {"ok": True, "symbol": SYMBOL, "last": get_last_price(SYMBOL)}, 200
-
-def read_payload() -> Dict[str, Any]:
-    try:
-        p = request.get_json(force=True, silent=False)
-    except Exception:
-        p = {}
-    return p or {}
-
-def check_secret(payload: Dict[str, Any]) -> None:
-    """
-    Accepte le secret en:
-      - Header: X-Webhook-Secret
-      - Query string: ?secret=...
-      - JSON: {"secret": "..."}
-    """
-    if not WEBHOOK_SECRET:
-        return
+def check_secret(req) -> None:
+    # On accepte: header, query, body JSON
     given = (
-        request.headers.get("X-Webhook-Secret")
-        or request.args.get("secret")
-        or str(payload.get("secret", ""))
+        req.headers.get("X-Webhook-Secret")
+        or req.headers.get("X-Webhook-Token")
+        or req.args.get("secret")
+        or req.args.get("token")
+        or (req.json or {}).get("secret")
+        or (req.json or {}).get("token")
+        or ""
     )
-    if given != WEBHOOK_SECRET:
+    if WEBHOOK_SECRET and given != WEBHOOK_SECRET:
         raise RuntimeError("Webhook secret invalide")
 
-@app.post("/webhook")
-def webhook() -> Any:
-    payload = read_payload()
+def safe_log_state(extra: Dict[str, Any] | None = None) -> None:
     try:
-        check_secret(payload)
+        snap = {
+            "symbol_env": SYMBOL_ENV,
+            "order_type": ORDER_TYPE,
+            "fixed_quote": FIXED_QUOTE_PER_TRADE,
+            "min_quote": MIN_QUOTE_PER_TRADE,
+            "risk_pct": RISK_PCT,
+            "max_sl_pct": MAX_SL_PCT,
+            "buy_cool_sec": BUY_COOL_SEC,
+            "trailing": TRAILING_ENABLED,
+            "dry_run": DRY_RUN,
+        }
+        if extra:
+            snap.update(extra)
+        log.debug("state=%s", json.dumps(snap))
+    except Exception:
+        pass
+
+@app.get("/")
+def root():
+    return jsonify({
+        "service": "tv-kraken-bot",
+        "status": "ok",
+        "endpoints": ["/health", "/price?symbol=BTC/EUR", "/balance?symbol=BTC/EUR", "/debug/limits?symbol=BTC/EUR", "/webhook"],
+    }), 200
+
+@app.get("/health")
+def health():
+    return jsonify({"ok": True, "exchange": EXCHANGE_NAME, "symbol_env": SYMBOL_ENV, "dry_run": DRY_RUN}), 200
+
+@app.get("/price")
+def price():
+    try:
+        symbol = normalize_symbol(request.args.get("symbol") or SYMBOL_ENV)
+        ensure_market(symbol)
+        last, bid, ask = fetch_price(symbol)
+        return jsonify({"symbol": symbol, "last": last, "bid": bid, "ask": ask}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/balance")
+def balance():
+    try:
+        symbol = normalize_symbol(request.args.get("symbol") or SYMBOL_ENV)
+        m = ensure_market(symbol)
+        base, quote = m["base"], m["quote"]
+        base_free, quote_free = fetch_balances(symbol)
+        return jsonify({"symbol": symbol, "base": base, "quote": quote, "base_free": base_free, "quote_free": quote_free}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/debug/limits")
+def debug_limits():
+    try:
+        symbol = normalize_symbol(request.args.get("symbol") or SYMBOL_ENV)
+        m = ensure_market(symbol)
+        last, bid, ask = fetch_price(symbol)
+        return jsonify({
+            "symbol": symbol,
+            "price": {"last": last, "bid": bid, "ask": ask},
+            "limits": m.get("limits") or {},
+            "precision": m.get("precision") or {},
+            "info_keys": list((m.get("info") or {}).keys()),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/webhook")
+def webhook():
+    # Auth
+    try:
+        check_secret(request)
     except Exception as e:
         log.warning("Secret KO: %s", e)
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
-    log.info("tv-kraken:Webhook payload: %s", json.dumps(payload, ensure_ascii=False))
+    # Payload
+    try:
+        payload = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        payload = {}
 
-    # champs utiles
-    raw_signal   = str(payload.get("signal") or payload.get("type") or "").strip().upper()
-    force_close  = bool(payload.get("force_close") or payload.get("force") or False)
-    price_hint   = float(payload.get("price") or 0.0)
-    symbol_in    = str(payload.get("symbol") or "").upper()
-    quote_override = payload.get("quote")  # montant en QUOTE pour BUY (ex: euros)
-    sell_amount   = payload.get("amount")  # quantité à vendre en BASE (optionnel)
+    # Log sans secret
+    safe_payload = dict(payload)
+    safe_payload.pop("secret", None)
+    safe_payload.pop("token", None)
+    log.info("Webhook payload: %s", json.dumps(safe_payload, ensure_ascii=False))
+    safe_log_state({"stage": "webhook_received"})
 
-    # normalisation signal
-    if raw_signal in ("LONG",):
-        raw_signal = "BUY"
-    if raw_signal in ("SHORT", "CLOSE"):
-        raw_signal = "SELL"
-    if raw_signal not in ("BUY", "SELL"):
+    # Signal & normalisation
+    signal = str(payload.get("signal") or payload.get("type") or "").strip().upper()
+    if signal == "PING":
+        return jsonify({"ok": True, "pong": True, "ts": int(time.time())}), 200
+    if signal in ("LONG",):
+        signal = "BUY"
+    if signal in ("SHORT", "CLOSE"):
+        signal = "SELL"
+    if signal not in ("BUY", "SELL"):
         return jsonify({"ok": False, "error": "signal_inconnu"}), 400
 
-    # symbole à utiliser
-    symbol = symbol_in if symbol_in in exchange.markets else SYMBOL
-    base = exchange.market(symbol)["base"]
-    quote = exchange.market(symbol)["quote"]
+    # Symbole
+    symbol = normalize_symbol(payload.get("symbol") or SYMBOL_ENV)
+    try:
+        ensure_market(symbol)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"bad_symbol: {e}"}), 400
 
-    # prix
-    last_price = float(price_hint or 0.0)
+    # Prix
+    price_hint = float(payload.get("price") or 0.0)
+    try:
+        last, bid, ask = fetch_price(symbol)
+        last_price = float(last or price_hint or 0.0)
+    except Exception:
+        last_price = price_hint or 0.0
+
+    # Fallback via orderbook
     if last_price <= 0:
-        last_price = get_last_price(symbol)
+        try:
+            ob = exchange.fetch_order_book(symbol, limit=5)
+            if signal == "BUY":
+                last_price = float(ob["asks"][0][0])
+            else:
+                last_price = float(ob["bids"][0][0])
+        except Exception:
+            pass
 
-    # cooldown BUY
+    # Paramètres sizing
+    quote_override = None
+    if payload.get("quote") is not None:
+        try:
+            qv = float(payload.get("quote"))
+            quote_override = qv if qv > 0 else None
+        except Exception:
+            quote_override = None
+
+    amount_override = None
+    for k in ("amount", "qty", "qty_base"):
+        if payload.get(k) is not None:
+            try:
+                av = float(payload.get(k))
+                amount_override = av if av > 0 else None
+                break
+            except Exception:
+                pass
+
+    # Cooldown BUY (sauf force)
+    force_close = bool(payload.get("force_close") or payload.get("force") or False)
     now = time.time()
-    if raw_signal == "BUY" and not force_close:
+    if signal == "BUY" and not force_close:
         last_buy = float(STATE.get("last_buy_ts", 0.0))
         if BUY_COOL_SEC > 0 and (now - last_buy) < BUY_COOL_SEC:
             wait = int(BUY_COOL_SEC - (now - last_buy))
             log.info("Cooldown achat actif (%ss restants)", wait)
             return jsonify({"ok": True, "skipped": "cooldown_buy", "wait_sec": wait}), 200
 
-    try:
-        if raw_signal == "BUY":
-            # sizing
-            spend, base_amt = compute_buy_amount(last_price, quote_override=quote_override)
-            if spend <= 0 or base_amt <= 0:
-                log.info("Sizing nul (spend=%.2f, amount=%.8f)", spend, base_amt)
-                return jsonify({"ok": False, "error": "sizing_zero"}), 200
-
-            log.info("BUY %s | spend≈%.2f %s => amount≈%.8f %s @ %.6f",
-                     symbol, spend, quote, base_amt, base, last_price)
-            order = place_order("buy", base_amt, symbol=symbol)
-
-            STATE["last_buy_ts"] = now
-            STATE["last_signal"] = "BUY"
-            save_state(STATE)
-
+    # ─── BUY ───
+    if signal == "BUY":
+        if last_price <= 0:
+            return jsonify({"ok": False, "error": "price_unavailable"}), 200
+        spend, base_amt = compute_buy_amount(symbol, last_price, quote_override)
+        if spend <= 0 or base_amt <= 0:
+            base_free, quote_free = fetch_balances(symbol)
             return jsonify({
-                "ok": True, "side": "BUY", "symbol": symbol, "amount": base_amt,
-                "spent_quote": spend, "price": last_price, "order": order
+                "ok": False,
+                "error": "sizing_error",
+                "detail": "Montant trop faible ou fonds indisponibles.",
+                "quote_free": quote_free, "min_quote": MIN_QUOTE_PER_TRADE
             }), 200
 
-        # SELL
-        ok, base_free = enough_to_sell()
-        if not ok:
-            log.info("Aucune quantité %s disponible pour SELL", base)
-            return jsonify({"ok": False, "error": "no_base_available", "base_free": base_free}), 200
+        log.info("BUY %s | spend≈%.2f %s => amount≈%.8f @ %.6f",
+                 symbol, spend, ensure_market(symbol)["quote"], base_amt, last_price)
+        try:
+            order = place_market_order(symbol, "buy", base_amt)
+        except ccxt.BaseError as ex:
+            log.exception("ccxt error BUY: %s", ex)
+            return jsonify({"ok": False, "error": f"ccxt:{type(ex).__name__}", "detail": str(ex)}), 200
 
-        amount = float(sell_amount) if sell_amount is not None else base_free
-        amount = round_amount(max(0.0, amount))
-        if amount <= 0:
-            return jsonify({"ok": False, "error": "amount_zero"}), 200
+        STATE["last_buy_ts"] = now
+        STATE["last_signal"] = "BUY"
+        save_state(STATE)
+        return jsonify({"ok": True, "side": "BUY", "symbol": symbol, "amount": base_amt, "order": order}), 200
 
-        log.info("SELL %s | amount≈%.8f %s", symbol, amount, base)
-        order = place_order("sell", amount, symbol=symbol)
+    # ─── SELL ───
+    if signal == "SELL":
+        if last_price <= 0:
+            return jsonify({"ok": False, "error": "price_unavailable"}), 200
+
+        qty = compute_sell_amount(symbol, last_price, amount_override, quote_override)
+        if qty <= 0:
+            base_free, _ = fetch_balances(symbol)
+            return jsonify({
+                "ok": False,
+                "error": "no_base_available",
+                "detail": "Quantité vendable insuffisante (réserve incluse ou min lot non atteint).",
+                "base_free": base_free, "base_reserve": BASE_RESERVE
+            }), 200
+
+        log.info("SELL %s | amount≈%.8f", symbol, qty)
+        try:
+            order = place_market_order(symbol, "sell", qty)
+        except ccxt.BaseError as ex:
+            log.exception("ccxt error SELL: %s", ex)
+            return jsonify({"ok": False, "error": f"ccxt:{type(ex).__name__}", "detail": str(ex)}), 200
 
         STATE["last_signal"] = "SELL"
         save_state(STATE)
+        return jsonify({"ok": True, "side": "SELL", "symbol": symbol, "amount": qty, "order": order}), 200
 
-        return jsonify({
-            "ok": True, "side": "SELL", "symbol": symbol, "amount": amount,
-            "order": order
-        }), 200
+    # unreachable
+    return jsonify({"ok": False, "error": "unreachable"}), 400
 
-    except ccxt.BaseError as ex:
-        log.exception("Erreur ccxt: %s", ex)
-        return jsonify({"ok": False, "error": f"ccxt:{type(ex).__name__}"}), 200
-    except Exception as ex:
-        log.exception("Erreur interne: %s", ex)
-        return jsonify({"ok": False, "error": "internal_error"}), 500
-
-
-# =============================================================================
-# Entrypoint
-# =============================================================================
+# ───────────────────────── Entrypoint ─────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=False)
