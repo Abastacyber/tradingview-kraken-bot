@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: tradingview-kraken-bot
+    env: python
+    plan: free
+    autoDeploy: true
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      gunicorn app:app --bind 0.0.0.0:$PORT
+      --workers ${WEB_CONCURRENCY:-1} --threads 1 --timeout 120
+
+    envVars:
+      - key: EXCHANGE
+        value: kraken
+      - key: SYMBOL
+        value: BTC/EUR
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: KRAKEN_API_KEY
+        sync: false
+      - key: KRAKEN_API_SECRET
+        sync: false
+      - key: FIXED_QUOTE_PER_TRADE
+        value: "50"
+      - key: MIN_QUOTE_PER_TRADE
+        value: "10"
+      - key: FEE_BUFFER_PCT
+        value: "0.0015"
+      - key: QUOTE_RESERVE
+        value: "0"
+      - key: BASE_RESERVE
+        value: "0.00005"
+      - key: BUY_SPLIT_CHUNKS
+        value: "1"
+      - key: BUY_SPLIT_DELAY_MS
+        value: "300"
+      - key: SELL_SPLIT_CHUNKS
+        value: "1"
+      - key: BUY_COOL_SEC
+        value: "180"
+      - key: DRY_RUN
+        value: "false"
+      - key: RESTORE_ON_START
+        value: "true"
+      - key: LOG_LEVEL
+        value: "DEBUG"
+      - key: ALLOW_PAYLOAD_SYMBOL
+        value: "true"
+      - key: STATE_FILE
+        value: /tmp/bot_state.json
+      - key: WEB_CONCURRENCY
+        value: "1"
