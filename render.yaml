@@ -7,8 +7,7 @@ services:
 
     buildCommand: pip install -r requirements.txt
     startCommand: >
-      gunicorn app:app --bind 0.0.0.0:$PORT
-      --workers ${WEB_CONCURRENCY:-1} --threads 1 --timeout 120
+      gunicorn -c gunicorn.conf.py app:app --bind 0.0.0.0:$PORT --workers ${WEB_CONCURRENCY:-1}
 
     envVars:
       - key: EXCHANGE
