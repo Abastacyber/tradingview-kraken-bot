@@ -5,7 +5,10 @@ import ccxt
 
 # ───────────────────────────────── Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
 log = logging.getLogger("tv-kraken")
 
 # ───────────────────────────────── Env / constants
@@ -33,7 +36,7 @@ BAL_CACHE_TTL_SEC             = int(os.getenv("BAL_CACHE_TTL_SEC", "8"))
 SELL_DUST_COOLDOWN_SEC        = int(os.getenv("SELL_DUST_COOLDOWN_SEC", "60"))
 DDOS_LOCKOUT_COOLDOWN_SEC     = int(os.getenv("DDOS_LOCKOUT_COOLDOWN_SEC", "90"))
 
-# trailing (si utilisé par ton Pine)
+# Trailing (si utilisé par ton Pine)
 TRAILING_ENABLED        = os.getenv("TRAILING_ENABLED", "true").lower() == "true"
 TRAIL_ACTIVATE_PCT_CONF2= float(os.getenv("TRAIL_ACTIVATE_PCT_CONF2", "0.003"))
 TRAIL_ACTIVATE_PCT_CONF3= float(os.getenv("TRAIL_ACTIVATE_PCT_CONF3", "0.005"))
@@ -43,24 +46,44 @@ TRAIL_GAP_CONF3         = float(os.getenv("TRAIL_GAP_CONF3", "0.003"))
 # ───────────────────────────────── Flask
 app = Flask(__name__)
 
-# ───────────────────────────────── Exchange init (global, 1 worker / 1 thread)
-def new_exchange():
-    apiKey = os.getenv("KRAKEN_API_KEY")
-    secret = os.getenv("KRAKEN_API_SECRET")
-    opts = {
-        "apiKey": apiKey,
-        "secret": secret,
-        "enableRateLimit": True,           # ccxt rate limiter
-        "rateLimit": 1000,                 # 1s de base
-        "options": {
-            "adjustForTimeDifference": True
-        }
-    }
-    ex = ccxt.kraken(opts)
-    ex.load_markets()
-    return ex
+# ───────────────────────────────── Exchange init (lazy, pas de réseau à l'import)
+_ex = None
+def get_ex():
+    """Retourne une instance ccxt Kraken initialisée sans appeler l'API à l'import."""
+    global _ex
+    if _ex is None:
+        apiKey = os.getenv("KRAKEN_API_KEY")
+        secret = os.getenv("KRAKEN_API_SECRET")
+        _ex = ccxt.kraken({
+            "apiKey": apiKey,
+            "secret": secret,
+            "enableRateLimit": True,
+            "options": {"adjustForTimeDifference": True},
+        })
+    return _ex
 
-ex = new_exchange()
+# Retry/backoff générique pour appels CCXT
+CCXT_RETRIES = int(os.getenv("CCXT_RETRIES", "6"))
+def ccxt_retry(fn, *args, **kwargs):
+    delay = 1
+    for i in range(1, CCXT_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except (ccxt.DDoSProtection, ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RateLimitExceeded) as e:
+            log.warning("%s: retry %d/%d in %ss | %s",
+                        type(e).__name__, i, CCXT_RETRIES, delay, e)
+        except ccxt.ExchangeError as e:
+            msg = str(e)
+            # cas transitoires/maintenance/lockout côté Kraken
+            if "Temporary lockout" in msg or "EService:" in msg or "EGeneral:" in msg:
+                log.warning("Transient ExchangeError: retry %d/%d in %ss | %s",
+                            i, CCXT_RETRIES, delay, msg)
+                _set_lockout()
+            else:
+                raise
+        time.sleep(delay)
+        delay = min(delay * 2, 60)
+    raise RuntimeError("Kraken unavailable after retries")
 
 # ───────────────────────────────── Anti-burst / cache / state
 _last_private_call = 0.0
@@ -92,45 +115,43 @@ def fetch_free_balance_cached():
     if BAL_CACHE["free"] and (now - BAL_CACHE["ts"] <= BAL_CACHE_TTL_SEC):
         return BAL_CACHE["free"]
     _throttle_private()
-    bal = ex.fetch_free_balance()
+    ex = get_ex()
+    bal = ccxt_retry(ex.fetch_free_balance)
     BAL_CACHE["free"] = bal
     BAL_CACHE["ts"] = time.time()
     return bal
 
 def market_min_amount(symbol: str) -> float:
+    ex = get_ex()
+    if not getattr(ex, "markets", None) or symbol not in ex.markets:
+        ccxt_retry(ex.load_markets)
     m = ex.markets.get(symbol)
-    if not m:
-        ex.load_markets()
-        m = ex.markets.get(symbol)
     v = (m or {}).get("limits", {}).get("amount", {}).get("min")
     # fallback raisonnable sur Kraken BTC/EUR
     return float(v) if v else 0.00005
 
 def ticker_price(symbol: str) -> float:
-    t = ex.fetch_ticker(symbol)
-    # utiliser 'last' si dispo, sinon mid
-    price = t.get("last") or ( (t.get("bid",0)+t.get("ask",0))/2 )
+    ex = get_ex()
+    t = ccxt_retry(ex.fetch_ticker, symbol)
+    price = t.get("last") or ((t.get("bid", 0) + t.get("ask", 0)) / 2)
     return float(price)
 
 def chunk_iter(n):
-    # renvoie n chunks (1 -> [1], 3 -> [1,2,3] pour étaler)
     for i in range(n):
         yield i
 
 # ───────────────────────────────── Helpers order
 def place_order(side, symbol, amount, price=None, order_type="market"):
+    ex = get_ex()
     if DRY_RUN:
         log.info("DRY_RUN | %s %s amount=%s price=%s type=%s", side, symbol, amount, price, order_type)
         return {"id": "dry-run", "status": "ok"}
 
     params = {}
     if order_type == "market":
-        res = ex.create_market_order(symbol, side, amount, params)
+        return ccxt_retry(ex.create_market_order, symbol, side, amount, params)
     else:
-        # peu utilisé ici, mais on laisse la porte ouverte
-        res = ex.create_order(symbol, order_type, side, amount, price, params)
-
-    return res
+        return ccxt_retry(ex.create_order, symbol, order_type, side, amount, price, params)
 
 # ───────────────────────────────── Web
 @app.get("/health")
@@ -153,19 +174,19 @@ def webhook():
             log.warning("bad_secret")
             return jsonify({"error":"bad secret"}), 401
 
-        signal = payload.get("signal", "").upper()
-        tf      = payload.get("timeframe")
-        reason  = payload.get("reason")
-        price_in= payload.get("price")
-        ts      = payload.get("timestamp")
-        force_close = bool(payload.get("force_close", False))
+        signal     = payload.get("signal", "").upper()
+        tf         = payload.get("timeframe")
+        reason     = payload.get("reason")
+        price_in   = payload.get("price")
+        ts         = payload.get("timestamp")
+        force_close= bool(payload.get("force_close", False))
         sym = (payload.get("symbol") if (ALLOW_PAYLOAD_SYMBOL and payload.get("symbol")) else SYMBOL)
 
         # — SELL path
         if signal == "SELL":
             log.info("sell_prepare | symbol=%s | force_close=%s", sym, force_close)
 
-            # Anti-dust repeat (si on vient de dire “dust too small”)
+            # Anti-dust repeat
             last_skip = LAST_DUST_SELL.get(sym, 0.0)
             if (time.time() - last_skip) < SELL_DUST_COOLDOWN_SEC:
                 left = int(SELL_DUST_COOLDOWN_SEC - (time.time()-last_skip))
@@ -181,7 +202,8 @@ def webhook():
             min_amount = market_min_amount(sym)
             qty = max(0.0, base_free - BASE_RESERVE)
 
-            log.info("sell_check | base_free=%.10f reserve=%.10f min_amount=%.10f qty=%.10f", base_free, BASE_RESERVE, min_amount, qty)
+            log.info("sell_check | base_free=%.10f reserve=%.10f min_amount=%.10f qty=%.10f",
+                     base_free, BASE_RESERVE, min_amount, qty)
 
             if qty < min_amount:
                 LAST_DUST_SELL[sym] = time.time()
@@ -210,7 +232,8 @@ def webhook():
 
             quote_budget = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
             if quote_budget < MIN_QUOTE_PER_TRADE:
-                log.info("skip_buy | reason=below_min_quote | quote=%.2f < %.2f", quote_budget, MIN_QUOTE_PER_TRADE)
+                log.info("skip_buy | reason=below_min_quote | quote=%.2f < %.2f",
+                         quote_budget, MIN_QUOTE_PER_TRADE)
                 return jsonify({"status":"skip","reason":"below_min_quote"}), 200
 
             px = float(price_in or ticker_price(sym))
@@ -249,7 +272,6 @@ def webhook():
 
     except ccxt.ExchangeError as e:
         msg = str(e)
-        # lockout exact côté Kraken
         if "Temporary lockout" in msg:
             log.error("Kraken lockout | %s", msg)
             _set_lockout()
@@ -261,6 +283,6 @@ def webhook():
         log.exception("Webhook error")
         return jsonify({"error":"webhook_exception","detail":str(e)}), 500
 
-# ───────────────────────────────── Run (Render utilise gunicorn)
+# ───────────────────────────────── Run (utile en local ; sur Render, Gunicorn lance app:app)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
