@@ -1,319 +1,330 @@
-import os, json, time, logging, threading
+# app.py
+# TV → Render → Kraken (CCXT)
+# - Retries réseau (backoff)
+# - Cache balance (fallback si Kraken reset)
+# - Anti-doublon webhook (3s)
+# - Normalisation symboles XBT/BTC
+# - BUY par montant en EUR (quote) -> quantité arrondie
+# - SELL sur solde libre, filtrage "dust" / min_amount
+# - Réponses 200 même si erreur réseau (skip_reason)
+
+import os
+import time
+import json
+import math
+import hmac
+import random
+import logging
+from hashlib import sha256
+from datetime import datetime, timedelta
+
 from flask import Flask, request, jsonify
+
 import ccxt
+import requests
+import urllib3
 
-# ───────────────────────────── Logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL,
-                    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-log = logging.getLogger("tv-kraken")
+# ───────────────────────── Config env
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "Ramses293")
+PORT = int(os.getenv("PORT", "10000"))
 
-# ───────────────────────────── Env / constants
-EXCHANGE              = os.getenv("EXCHANGE", "kraken")
-SYMBOL                = os.getenv("SYMBOL", "BTC/EUR")
-ALLOW_PAYLOAD_SYMBOL  = os.getenv("ALLOW_PAYLOAD_SYMBOL", "true").lower() == "true"
+API_KEY = os.getenv("KRAKEN_API_KEY") or os.getenv("KRAKEN_KEY") or ""
+API_SECRET = os.getenv("KRAKEN_API_SECRET") or os.getenv("KRAKEN_SECRET") or ""
 
-BASE_RESERVE          = float(os.getenv("BASE_RESERVE", "0"))
-QUOTE_RESERVE         = float(os.getenv("QUOTE_RESERVE", "0"))
-FEE_BUFFER_PCT        = float(os.getenv("FEE_BUFFER_PCT", "0.0015"))
+SYMBOL_DEFAULT = os.getenv("SYMBOL_DEFAULT", "BTC/EUR")  # interne en BTC/EUR, mappé correctement côté CCXT
+FIXED_QUOTE_EUR = float(os.getenv("FIXED_QUOTE_EUR", "100"))  # Montant EUR par défaut si non fourni dans le payload
+BUY_COOL_SEC = int(os.getenv("BUY_COOL_SEC", "180"))          # anti spam des BUY
+SELL_COOL_SEC = int(os.getenv("SELL_COOL_SEC", "5"))          # petit cooldown SELL
 
-FIXED_QUOTE_PER_TRADE = float(os.getenv("FIXED_QUOTE_PER_TRADE", "50"))
-MIN_QUOTE_PER_TRADE   = float(os.getenv("MIN_QUOTE_PER_TRADE", "10"))
+# Retry/backoff
+RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
+RETRY_BASE_SEC = float(os.getenv("RETRY_BASE_SEC", "0.5"))
 
-BUY_SPLIT_CHUNKS      = int(os.getenv("BUY_SPLIT_CHUNKS", "1"))
-BUY_SPLIT_DELAY_MS    = int(os.getenv("BUY_SPLIT_DELAY_MS", "300"))
-SELL_SPLIT_CHUNKS     = int(os.getenv("SELL_SPLIT_CHUNKS", "1"))
+# Cache balance
+BAL_TTL_SEC = int(os.getenv("BAL_TTL_SEC", "5"))
 
-ORDER_TYPE            = os.getenv("ORDER_TYPE", "market").lower()
-DRY_RUN               = os.getenv("DRY_RUN", "false").lower() == "true"
+# Logger
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("tv-kraken")
 
-BUY_COOL_SEC          = int(os.getenv("BUY_COOL_SEC", "180"))
-RESTORE_ON_START      = os.getenv("RESTORE_ON_START", "true").lower() == "true"
-STATE_FILE            = os.getenv("STATE_FILE", "/tmp/bot_state.json")
-WEBHOOK_SECRET        = os.getenv("WEBHOOK_SECRET", "change-me")
+# ───────────────────────── CCXT Kraken
+kraken = ccxt.kraken({
+    "apiKey": API_KEY,
+    "secret": API_SECRET,
+    "enableRateLimit": True,
+    # Kraken peut être chatouilleux → petit délai
+    "timeout": 20000,
+})
 
-# Anti-DDoS / cache / timings
-PRIVATE_MIN_INTERVAL_MS   = int(os.getenv("PRIVATE_MIN_INTERVAL_MS", "1200"))
-BAL_CACHE_TTL_SEC         = int(os.getenv("BAL_CACHE_TTL_SEC", "8"))
-SELL_DUST_COOLDOWN_SEC    = int(os.getenv("SELL_DUST_COOLDOWN_SEC", "60"))
-DDOS_LOCKOUT_COOLDOWN_SEC = int(os.getenv("DDOS_LOCKOUT_COOLDOWN_SEC", "90"))
+# Pour tracer ce que CCXT envoie (utile en DEBUG)
+kraken.session.headers.update({"User-Agent": "python-requests/2.x ccxt"})
 
-# Anti-doublon d’alertes (même side+symbol reçus à la suite)
-DEDUP_WINDOW_SEC       = int(os.getenv("DEDUP_WINDOW_SEC", "3"))
-
-# Trailing (placeholders si utilisé par ton Pine)
-TRAILING_ENABLED       = os.getenv("TRAILING_ENABLED", "true").lower() == "true"
-TRAIL_ACTIVATE_PCT_CONF2 = float(os.getenv("TRAIL_ACTIVITE_PCT_CONF2", "0.003"))
-TRAIL_ACTIVATE_PCT_CONF3 = float(os.getenv("TRAIL_ACTIVITE_PCT_CONF3", "0.005"))
-TRAIL_GAP_CONF2          = float(os.getenv("TRAIL_GAP_CONF2", "0.0004"))
-TRAIL_GAP_CONF3          = float(os.getenv("TRAIL_GAP_CONF3", "0.003"))
-
-# ───────────────────────────── Flask
+# ───────────────────────── Flask
 app = Flask(__name__)
 
-# ───────────────────────────── Exchange init (une instance globale)
-def new_exchange():
-    apiKey = os.getenv("KRAKEN_API_KEY")
-    secret = os.getenv("KRAKEN_API_SECRET")
-    opts = {
-        "apiKey": apiKey,
-        "secret": secret,
-        "enableRateLimit": True,
-        "rateLimit": 1000,
-        "options": {"adjustForTimeDifference": True}
-    }
-    ex = ccxt.kraken(opts)
-    ex.load_markets()
-    return ex
+# ───────────────────────── Utilitaires
 
-ex = new_exchange()
+RETRYABLE = (
+    ccxt.NetworkError,
+    ccxt.DDoSProtection,
+    ccxt.ExchangeNotAvailable,
+    requests.exceptions.ConnectionError,
+    urllib3.exceptions.ProtocolError,
+    ConnectionResetError,
+)
 
-# ───────────────────────────── Anti-burst / cache / state
-_last_private_call = 0.0
-_private_lock = threading.Lock()
-LOCKED_UNTIL = 0.0
-
-BAL_CACHE = {"ts": 0.0, "free": {}}
-LAST_DUST_SELL = {}        # symbol -> last timestamp (skip dust repeatedly)
-LAST_BUY_TS = 0.0
-LAST_ORDER_SEEN = {}       # anti-doublon: key = f"{signal}:{symbol}" -> ts
-
-def _throttle_private():
-    global _last_private_call
-    with _private_lock:
-        now = time.time()
-        wait = (_last_private_call + (PRIVATE_MIN_INTERVAL_MS/1000.0)) - now
-        if wait > 0:
+def with_retry(fn, *args, **kwargs):
+    for i in range(RETRY_ATTEMPTS):
+        try:
+            return fn(*args, **kwargs)
+        except RETRYABLE as e:
+            wait = RETRY_BASE_SEC * (2 ** i) + random.uniform(0, 0.25)
+            logger.warning(f"retryable error {type(e).__name__}: {e} | attempt={i+1}/{RETRY_ATTEMPTS} | sleep={wait:.2f}s")
             time.sleep(wait)
-        _last_private_call = time.time()
+    # dernière tentative (laisse lever l'erreur pour que l'appelant décide)
+    return fn(*args, **kwargs)
 
-def _set_lockout():
-    global LOCKED_UNTIL
-    LOCKED_UNTIL = time.time() + DDOS_LOCKOUT_COOLDOWN_SEC
+def now_ts_ms() -> int:
+    return int(time.time() * 1000)
 
-def _locked_now():
-    return time.time() < LOCKED_UNTIL
+# ── Normalisation des symboles
+def normalize_symbol(sym_in: str) -> str:
+    """
+    Accepte 'BTC/EUR' ou 'XBT/EUR' → travaille en 'BTC/EUR' (CCXT mappe vers XXBTZEUR).
+    """
+    s = (sym_in or SYMBOL_DEFAULT).upper().replace("XBT", "BTC")
+    # sécurité format
+    if "/" not in s:
+        if s.startswith("BTC"):
+            s = "BTC/EUR"
+        else:
+            s = SYMBOL_DEFAULT
+    return s
+
+# ── Chargement des marchés + infos de précision/min amount
+_markets_cache = None
+def load_markets_if_needed():
+    global _markets_cache
+    if _markets_cache is None:
+        _markets_cache = with_retry(kraken.load_markets)
+
+def get_market(symbol: str):
+    load_markets_if_needed()
+    m = kraken.markets.get(symbol)
+    if not m:
+        # Essaye XBT/EUR si pas trouvé
+        alt = symbol.replace("BTC", "XBT")
+        m = kraken.markets.get(alt)
+    return m
+
+def amount_to_precision(symbol: str, amount: float) -> float:
+    return float(kraken.amount_to_precision(symbol, amount))
+
+# ── Balance cache
+_last_bal = None
+_last_bal_at = 0
+
+def fetch_free_balance_cached() -> dict:
+    global _last_bal, _last_bal_at
+    try:
+        if (time.time() - _last_bal_at) <= BAL_TTL_SEC and _last_bal is not None:
+            return _last_bal
+        bal = with_retry(kraken.fetch_free_balance)
+        _last_bal = bal
+        _last_bal_at = time.time()
+        logger.debug(f"balance refreshed (cached {BAL_TTL_SEC}s)")
+        return bal
+    except RETRYABLE as e:
+        logger.error(f"balance fetch error (network): {e}")
+        return _last_bal or {}
 
 def invalidate_balance_cache():
-    BAL_CACHE["ts"] = 0.0
-    BAL_CACHE["free"] = {}
+    global _last_bal_at
+    _last_bal_at = 0
 
-def fetch_free_balance_cached():
-    now = time.time()
-    if BAL_CACHE["free"] and (now - BAL_CACHE["ts"] <= BAL_CACHE_TTL_SEC):
-        return BAL_CACHE["free"]
-    _throttle_private()
-    bal = ex.fetch_free_balance()
-    BAL_CACHE["free"] = bal
-    BAL_CACHE["ts"] = time.time()
-    return bal
-
-def market_min_amount(symbol: str) -> float:
-    m = ex.markets.get(symbol)
-    if not m:
-        ex.load_markets()
-        m = ex.markets.get(symbol)
-    v = (m or {}).get("limits", {}).get("amount", {}).get("min")
-    # fallback raisonnable pour BTC/EUR Kraken
-    return float(v) if v else 0.00005
-
-def ticker_price(symbol: str) -> float:
-    t = ex.fetch_ticker(symbol)
-    price = t.get("last") or ((t.get("bid", 0) + t.get("ask", 0)) / 2.0)
+# ── Prix last
+def fetch_last_price(symbol: str) -> float:
+    t = with_retry(kraken.fetch_ticker, symbol)
+    # 'last' ou 'close'
+    price = t.get("last") or t.get("close") or t.get("bid") or t.get("ask")
+    if not price:
+        raise RuntimeError("no_price")
     return float(price)
 
-def chunk_iter(n):
-    for i in range(n):
-        yield i
+# ── Anti-doublon (3s)
+_recent_signals = {}  # key -> ts_ms
 
-def normalize_symbol(raw_sym: str) -> str:
+def is_duplicate(key: str, window_sec=3) -> bool:
+    now = time.time()
+    # purge légère
+    for k, v in list(_recent_signals.items()):
+        if now - v > 5:
+            _recent_signals.pop(k, None)
+    if key in _recent_signals and (now - _recent_signals[key]) < window_sec:
+        return True
+    _recent_signals[key] = now
+    return False
+
+# ───────────────────────── Trading helpers
+
+_last_buy_at = 0
+_last_sell_at = 0
+
+def compute_min_amount(symbol: str) -> float:
+    m = get_market(symbol)
+    if m and m.get("limits") and m["limits"].get("amount") and m["limits"]["amount"].get("min"):
+        return float(m["limits"]["amount"]["min"])
+    # safe fallback pour BTC sur Kraken
+    return 0.00001
+
+def create_market_buy_by_quote(symbol: str, quote_eur: float):
     """
-    Normalise BTC/XBT pour Kraken via ccxt.
-    Essaye 'BTC/QUOTE', sinon 'XBT/QUOTE'.
+    Calcule la quantité en BTC pour un BUY market à partir d'un montant EUR.
     """
-    s = (raw_sym or "").upper().replace(" ", "")
-    if "/" not in s:
-        return s
-    s_btc = s.replace("XBT", "BTC")
-    if s_btc in ex.markets:
-        return s_btc
-    s_xbt = s_btc.replace("BTC", "XBT")
-    if s_xbt in ex.markets:
-        return s_xbt
-    # reload au cas où
-    ex.load_markets()
-    if s_btc in ex.markets:
-        return s_btc
-    if s_xbt in ex.markets:
-        return s_xbt
-    return s  # on tente tel quel
+    px = fetch_last_price(symbol)
+    qty_raw = max(quote_eur / px, 0.0)
+    qty = amount_to_precision(symbol, qty_raw)
+    min_amt = compute_min_amount(symbol)
+    if qty < min_amt:
+        return None, f"min_amount_not_met qty={qty} < {min_amt}"
+    order = with_retry(kraken.create_market_buy_order, symbol, qty)
+    invalidate_balance_cache()
+    return order, None
 
-# ───────────────────────────── Helpers order
-def place_order(side, symbol, amount, price=None, order_type="market"):
-    if DRY_RUN:
-        log.info("DRY_RUN | %s %s amount=%s price=%s type=%s", side, symbol, amount, price, order_type)
-        return {"id": "dry-run", "status": "ok"}
+def create_market_sell_all_free(symbol: str):
+    base_ccy = symbol.split("/")[0]
+    free = fetch_free_balance_cached()
+    qty_raw = float(free.get(base_ccy, 0.0))
+    min_amt = compute_min_amount(symbol)
+    if qty_raw <= 0:
+        return None, f"dust_too_small qty={qty_raw}"
+    qty = amount_to_precision(symbol, qty_raw)
+    if qty < min_amt:
+        return None, f"dust_too_small qty={qty} < {min_amt}"
+    order = with_retry(kraken.create_market_sell_order, symbol, qty)
+    invalidate_balance_cache()
+    return order, None
 
-    params = {}
-    if order_type == "market":
-        return ex.create_market_order(symbol, side, amount, params)
-    else:
-        return ex.create_order(symbol, order_type, side, amount, price, params)
+# ───────────────────────── Flask routes
 
-# ───────────────────────────── Routes
+@app.get("/")
+def root():
+    return jsonify({"name": "tv-kraken-bot", "status": "ok"}), 200
+
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"}), 200
+    return "ok", 200
 
 @app.post("/webhook")
 def webhook():
-    global LAST_BUY_TS
-
-    if _locked_now():
-        left = int(LOCKED_UNTIL - time.time())
-        log.warning("locked_out | encore %ss | on ignore ce webhook", max(0, left))
-        return jsonify({"status": "locked_out", "left_sec": max(0, left)}), 200
-
+    global _last_buy_at, _last_sell_at
+    t0 = time.time()
     try:
         payload = request.get_json(force=True, silent=False)
-        log.debug("Webhook payload: %s", json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        logger.exception("webhook json parse error")
+        return jsonify({"ok": False, "error": "bad_json"}), 400
 
-        if not payload or payload.get("secret") != WEBHOOK_SECRET:
-            log.warning("bad_secret")
-            return jsonify({"error": "bad secret"}), 401
+    # Logs utiles
+    try:
+        log_payload = {**payload}
+        if "secret" in log_payload:
+            log_payload["secret"] = "***"
+        logger.debug(f"tv-kraken | Webhook payload: {json.dumps(log_payload, ensure_ascii=False)}")
+    except Exception:
+        pass
 
-        signal   = payload.get("signal", "").upper()
-        tf       = payload.get("timeframe")  # non utilisé ici mais conservé pour logs
-        reason   = payload.get("reason")
-        px_in    = payload.get("price")
-        ts       = payload.get("timestamp")
-        force_close = bool(payload.get("force_close", False))
+    # Secret
+    if payload.get("secret") != WEBHOOK_SECRET:
+        logger.warning("invalid secret")
+        return jsonify({"ok": False, "error": "forbidden"}), 403
 
-        raw_sym = (payload.get("symbol") if (ALLOW_PAYLOAD_SYMBOL and payload.get("symbol")) else SYMBOL)
-        sym = normalize_symbol(raw_sym)
-        if raw_sym != sym:
-            log.debug("Symbol normalized | raw=%s -> sym=%s", raw_sym, sym)
+    # Anti-doublon
+    sig = payload.get("signal", "").upper()
+    sym_in = payload.get("symbol") or SYMBOL_DEFAULT
+    key = f"{sig}|{sym_in}|{payload.get('timestamp', 0)}"
+    if is_duplicate(key, window_sec=3):
+        logger.info(f"dedup | key={key} | skipped (<3s)")
+        return jsonify({"ok": True, "skip": True, "reason": "dup"}), 200
 
-        # Anti-doublon ultra rapproché (même signal + même symbole)
-        now = time.time()
-        key = f"{signal}:{sym}"
-        last = LAST_ORDER_SEEN.get(key, 0.0)
-        if (now - last) < DEDUP_WINDOW_SEC:
-            left = int(DEDUP_WINDOW_SEC - (now - last))
-            log.info("skip_dedup | signal=%s sym=%s | delta=%.2fs < %ss",
-                     signal, sym, (now - last), DEDUP_WINDOW_SEC)
-            return jsonify({"status": "skip", "reason": "dedup", "left_sec": max(0, left)}), 200
-        LAST_ORDER_SEEN[key] = now
+    # Normalisation symbole
+    symbol = normalize_symbol(sym_in)
 
-        # ───── SELL path ─────
-        if signal == "SELL":
-            log.info("sell_prepare | symbol=%s | force_close=%s", sym, force_close)
+    # PING utilitaire
+    if sig == "PING":
+        return jsonify({"ok": True, "pong": True}), 200
 
-            # Anti-dust repeat cooldown
-            last_skip = LAST_DUST_SELL.get(sym, 0.0)
-            if (time.time() - last_skip) < SELL_DUST_COOLDOWN_SEC:
-                left = int(SELL_DUST_COOLDOWN_SEC - (time.time() - last_skip))
-                log.info("skip_sell | reason=dust_cooldown | left=%ss", left)
-                return jsonify({"status": "skip", "reason": "dust_cooldown", "left_sec": left}), 200
+    # Type ordre (market attendu)
+    order_type = (payload.get("type") or "market").lower()
+    if order_type != "market":
+        return jsonify({"ok": False, "error": "only_market_supported"}), 200
 
-            # Solde base disponible
+    # BUY
+    if sig == "BUY":
+        # anti-spam
+        if (time.time() - _last_buy_at) < BUY_COOL_SEC:
+            return jsonify({"ok": True, "skip": True, "reason": "buy_cooldown"}), 200
+
+        quote = float(payload.get("quote") or FIXED_QUOTE_EUR)
+        try:
+            # sécurité : si pas assez d'EUR libre, skip
             free = fetch_free_balance_cached()
-            base_ccy = sym.split("/")[0].replace("XBT", "BTC")
-            base_free = float(free.get(base_ccy, 0.0))
+            eur_free = float(free.get("EUR", 0.0))
+            if eur_free <= 0 or eur_free < max(quote * 0.99, 5.0):
+                logger.info(f"buy_skip | not_enough_EUR free={eur_free} wanted≈{quote}")
+                return jsonify({"ok": True, "skip": True, "reason": "not_enough_eur", "eur_free": eur_free}), 200
 
-            min_amount = market_min_amount(sym)
-            qty = max(0.0, base_free - BASE_RESERVE)
+            order, err = create_market_buy_by_quote(symbol, quote)
+            if err:
+                logger.info(f"buy_skip | {err}")
+                return jsonify({"ok": True, "skip": True, "reason": err}), 200
 
-            log.info("sell_check | base_free=%.10f reserve=%.10f min_amount=%.10f qty=%.10f",
-                     base_free, BASE_RESERVE, min_amount, qty)
+            _last_buy_at = time.time()
+            logger.info(f"buy_done | tx={order.get('id')} qty={order.get('amount')} {symbol}")
+            return jsonify({"ok": True, "side": "buy", "symbol": symbol, "order": order}), 200
 
-            if qty < min_amount:
-                LAST_DUST_SELL[sym] = time.time()
-                log.info("skip_sell | reason=dust_too_small | qty=%.10f < min_amount=%.10f",
-                         qty, min_amount)
-                return jsonify({"status": "skip", "reason": "dust_too_small",
-                                "qty": qty, "min": min_amount}), 200
+        except RETRYABLE as e:
+            logger.error(f"buy network error: {e}")
+            return jsonify({"ok": False, "skip": True, "reason": "network_error"}), 200
+        except Exception as e:
+            logger.exception("buy error")
+            return jsonify({"ok": False, "error": str(e)}), 500
 
-            # Split éventuel
-            chunks = max(1, SELL_SPLIT_CHUNKS)
-            per = qty / chunks
-            for i in chunk_iter(chunks):
-                _throttle_private()
-                place_order("sell", sym, per, order_type=ORDER_TYPE)
-                if i < chunks - 1:
-                    time.sleep(BUY_SPLIT_DELAY_MS/1000.0)
+    # SELL (force_close ignoré ici, on vend le free)
+    if sig == "SELL":
+        if (time.time() - _last_sell_at) < SELL_COOL_SEC:
+            return jsonify({"ok": True, "skip": True, "reason": "sell_cooldown"}), 200
+        try:
+            order, err = create_market_sell_all_free(symbol)
+            if err:
+                logger.info(f"skip_sell | reason={err}")
+                return jsonify({"ok": True, "skip": True, "reason": err}), 200
 
-            # Invalider le cache solde pour éviter un 2e SELL avec ancien solde
-            invalidate_balance_cache()
+            _last_sell_at = time.time()
+            logger.info(f"sell_done | qty={order.get('amount')} chunks={1}")
+            return jsonify({"ok": True, "side": "sell", "symbol": symbol, "order": order}), 200
 
-            log.info("sell_done | qty=%.10f chunks=%d", qty, chunks)
-            return jsonify({"status": "ok", "action": "sell", "qty": qty}), 200
+        except RETRYABLE as e:
+            logger.error(f"sell network error: {e}")
+            return jsonify({"ok": False, "skip": True, "reason": "network_error"}), 200
+        except Exception as e:
+            logger.exception("sell error")
+            return jsonify({"ok": False, "error": str(e)}), 500
 
-        # ───── BUY path ─────
-        if signal == "BUY":
-            now = time.time()
-            if (now - LAST_BUY_TS) < BUY_COOL_SEC:
-                left = int(BUY_COOL_SEC - (now - LAST_BUY_TS))
-                log.info("skip_buy | reason=cooldown | left=%ss", left)
-                return jsonify({"status": "skip", "reason": "cooldown", "left_sec": left}), 200
+    # Signal inconnu
+    return jsonify({"ok": False, "error": "bad_signal"}), 200
 
-            quote_budget = float(payload.get("quote") or FIXED_QUOTE_PER_TRADE)
-            if quote_budget < MIN_QUOTE_PER_TRADE:
-                log.info("skip_buy | reason=below_min_quote | quote=%.2f < %.2f",
-                         quote_budget, MIN_QUOTE_PER_TRADE)
-                return jsonify({"status": "skip", "reason": "below_min_quote"}), 200
 
-            px = float(px_in or ticker_price(sym))
-            min_amount = market_min_amount(sym)
-
-            net_quote = max(0.0, quote_budget - QUOTE_RESERVE)
-            net_quote *= (1 - FEE_BUFFER_PCT)
-            qty = net_quote / px
-
-            if qty < min_amount:
-                log.info("skip_buy | reason=amount_below_min | qty=%.8f < min=%.8f",
-                         qty, min_amount)
-                return jsonify({"status": "skip", "reason": "amount_below_min",
-                                "qty": qty, "min": min_amount}), 200
-
-            chunks = max(1, BUY_SPLIT_CHUNKS)
-            per = qty / chunks
-            for i in chunk_iter(chunks):
-                _throttle_private()
-                place_order("buy", sym, per, order_type=ORDER_TYPE)
-                if i < chunks - 1:
-                    time.sleep(BUY_SPLIT_DELAY_MS/1000.0)
-
-            LAST_BUY_TS = time.time()
-            invalidate_balance_cache()
-
-            log.info("buy_done | qty=%.8f chunks=%d price=%.2f", qty, chunks, px)
-            return jsonify({"status": "ok", "action": "buy", "qty": qty, "price": px}), 200
-
-        # ───── PING / autres ─────
-        if signal == "PING":
-            return jsonify({"status": "pong"}), 200
-
-        return jsonify({"status": "ignored", "detail": "unknown signal"}), 200
-
-    except (ccxt.DDoSProtection, ccxt.RateLimitExceeded) as e:
-        log.error("DDoS/RateLimit | %s", e)
-        _set_lockout()
-        return jsonify({"status": "locked_out", "detail": str(e)}), 200
-
-    except ccxt.ExchangeError as e:
-        msg = str(e)
-        if "Temporary lockout" in msg:
-            log.error("Kraken lockout | %s", msg)
-            _set_lockout()
-            return jsonify({"status": "locked_out", "detail": "kraken_temporary_lockout"}), 200
-        log.exception("ExchangeError")
-        return jsonify({"error": "exchange_error", "detail": msg}), 200
-
-    except Exception as e:
-        log.exception("Webhook error")
-        return jsonify({"error": "webhook_exception", "detail": str(e)}), 500
-
-# ───────────────────────────── Run local (Render utilise gunicorn en prod)
+# ───────────────────────── Entrée
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+    # Pré-charge les marchés au boot (évite la latence sur 1er appel)
+    try:
+        load_markets_if_needed()
+        logger.info("markets loaded")
+    except Exception as e:
+        logger.warning(f"load_markets failed (will retry later): {e}")
+
+    app.run(host="0.0.0.0", port=PORT)
