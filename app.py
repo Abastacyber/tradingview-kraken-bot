@@ -1,139 +1,177 @@
-import os, hmac, json, time, math
+import os, json, time, math, hmac, hashlib
 from flask import Flask, request, jsonify
 import ccxt
 
 app = Flask(__name__)
 
-# ---- Secrets / config -------------------------------------------------
-SECRET = os.environ.get("WEBHOOK_SECRET") or os.environ.get("SECRET")
+# ---------- ENV VARS (rétro-compat) ----------
+SECRET = (os.getenv("WEBHOOK_SECRET") or
+          os.getenv("SECRET") or
+          os.getenv("WEBHOOKSECRET") or "")
+
+API_KEY    = (os.getenv("KRAKEN_KEY") or
+              os.getenv("API_KEY") or
+              os.getenv("KRAKEN_API_KEY") or "")
+API_SECRET = (os.getenv("KRAKEN_SECRET") or
+              os.getenv("API_SECRET") or
+              os.getenv("KRAKEN_API_SECRET") or "")
+
+BASE_ORDER_EUR   = float(os.getenv("BASE_ORDER_EUR", "25"))     # ticket d’achat
+MIN_NOTIONAL_EUR = float(os.getenv("MIN_NOTIONAL_EUR", "15"))   # coût min
+SYMBOL_FALLBACK  = os.getenv("SYMBOL_FALLBACK", "BTC/EUR")
+
+def _mask(s: str) -> str:
+    s = str(s or "")
+    return (s[:2] + "…" + s[-2:]) if len(s) >= 6 else ("set" if s else "missing")
+
 if not SECRET:
-    raise RuntimeError("WEBHOOK_SECRET/SECRET non défini(e) dans les variables d'environnement")
+    # on fail fast pour repérer un secret manquant dès le boot
+    raise RuntimeError("WEBHOOK_SECRET/SECRET manquant")
 
-API_KEY    = os.environ.get("KRAKEN_KEY", "")
-API_SECRET = os.environ.get("KRAKEN_SECRET", "")
+if not API_KEY or not API_SECRET:
+    raise RuntimeError(f"KRAKEN_KEY/API_KEY ou KRAKEN_SECRET/API_SECRET manquants "
+                       f"(key={_mask(API_KEY)}, sec={_mask(API_SECRET)})")
 
-# ---- Kraken via CCXT --------------------------------------------------
+# ---------- CCXT KRAKEN ----------
 kraken = ccxt.kraken({
     "apiKey": API_KEY,
     "secret": API_SECRET,
     "enableRateLimit": True,
     "timeout": 20000,
+    "options": {"defaultType": "spot"},
 })
 
-SYMBOL_MAP = {
-    "BTC/EUR": "BTC/EUR",
-    "XBT/EUR": "BTC/EUR",   # fallback si TV envoie XBT/EUR
-}
+# ---------- Helpers ----------
+def normalize_symbol(sym: str) -> str:
+    """Accepte XBT/EUR, BTCEUR, btc-eur… et renvoie BTC/EUR."""
+    if not sym:
+        return SYMBOL_FALLBACK
+    s = sym.upper().replace("-", "/")
+    s = s.replace("XBT", "BTC")      # unifie le nom Kraken/TV
+    if "/" not in s and len(s) >= 6:
+        # formats collés: BTCEUR, ETHEUR…
+        s = s[:-3] + "/" + s[-3:]
+    return s
 
-MIN_NOTIONAL_EUR = float(os.environ.get("MIN_NOTIONAL_EUR", "20"))
-BASE_ORDER_EUR   = float(os.environ.get("BASE_ORDER_EUR",   "25"))
-
-# ---- Helpers ----------------------------------------------------------
-def safe_symbol(sym: str) -> str:
-    sym = (sym or "").upper().strip()
-    return SYMBOL_MAP.get(sym, "BTC/EUR")
-
-def check_secret(incoming: str) -> bool:
-    if incoming is None:
-        return False
-    return hmac.compare_digest(str(incoming), str(SECRET))
-
-def quote_available_eur():
-    bal = kraken.fetch_balance()
-    eur = bal.get("EUR", {})
-    free = eur.get("free", 0) or 0
-    return float(free)
-
-def create_market_order(symbol: str, side: str, eur_amount: float):
-    if eur_amount < MIN_NOTIONAL_EUR:
-        return {"skipped": True, "reason": f"notional<{MIN_NOTIONAL_EUR}"}
-
-    # convertir EUR -> quantité à trader
+def amount_from_eur(symbol: str, eur: float) -> float:
+    """Convertit un budget EUR en quantité base, arrondie à la précision marché."""
     ticker = kraken.fetch_ticker(symbol)
-    price  = float(ticker["last"])
-    amount = eur_amount / price
+    price  = float(ticker["last"] or ticker["close"] or ticker["bid"])
+    mkt    = kraken.market(symbol)
+    raw_amt = eur / price
+    return float(kraken.amount_to_precision(symbol, raw_amt)), price, mkt
 
-    # arrondis simples
-    amount = float(kraken.amount_to_lots(symbol, amount)) if hasattr(kraken, "amount_to_lots") else round(amount, 8)
+def min_amount(symbol: str) -> float:
+    mkt = kraken.market(symbol)
+    lim = (mkt.get("limits") or {}).get("amount") or {}
+    return float(lim.get("min") or 0.00001)
 
-    order = kraken.create_order(symbol, "market", side, amount)
-    return {"skipped": False, "order": order}
+def min_cost(symbol: str) -> float:
+    mkt = kraken.market(symbol)
+    lim = (mkt.get("limits") or {}).get("cost") or {}
+    return float(lim.get("min") or MIN_NOTIONAL_EUR)
 
-def decide_eur_amount(confidence: int) -> float:
-    # ex: 2 -> base, 3 -> 1.5x
-    mult = 1.5 if confidence >= 3 else 1.0
-    return BASE_ORDER_EUR * mult
+def free_base(symbol: str) -> float:
+    base = symbol.split("/")[0]
+    bal  = kraken.fetch_free_balance()
+    return float(bal.get(base, 0) or 0)
 
-# ---- Routes -----------------------------------------------------------
-@app.route("/health", methods=["GET"])
+# ---------- Endpoints ----------
+@app.get("/health")
 def health():
-    return jsonify({"ok": True, "ts": int(time.time())})
+    return jsonify({
+        "ok": True,
+        "exchange": "kraken",
+        "symbol_fallback": SYMBOL_FALLBACK,
+        "env": {
+            "WEBHOOK_SECRET": "set" if SECRET else "missing",
+            "API_KEY": _mask(API_KEY),
+            "API_SECRET": _mask(API_SECRET),
+        },
+        "ts": int(time.time()*1000),
+    })
 
-@app.route("/webhook", methods=["POST"])
+# Diag protégé: /diag?secret=xxxxx
+@app.get("/diag")
+def diag():
+    if request.args.get("secret") != SECRET:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        markets = kraken.load_markets()
+        bal = kraken.fetch_balance()
+        return jsonify({
+            "ok": True,
+            "markets_loaded": len(markets),
+            "eur_free": bal.get("EUR", {}).get("free", 0),
+            "ts": int(time.time()*1000),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.post("/webhook")
 def webhook():
     try:
         payload = request.get_json(force=True, silent=False) or {}
     except Exception:
-        return ("invalid json", 400)
+        return jsonify({"ok": False, "error": "invalid-json"}), 400
 
-    incoming_secret = payload.get("secret") or request.headers.get("X-Webhook-Secret") or request.args.get("secret")
-    if not check_secret(incoming_secret):
-        # debug safe: ne logue pas le secret complet
-        s = str(incoming_secret or "")
-        app.logger.error(f"tv-kraken | Bad secret | got len={len(s)} head='{s[:2]}' tail='{s[-2:] if len(s)>=2 else ''}'")
-        return ("Bad secret", 401)
+    # --- Secret simple (égalité) ---
+    if str(payload.get("secret", "")) != SECRET:
+        app.logger.error("Bad secret")
+        return jsonify({"ok": False, "error": "bad-secret"}), 401
 
-    signal = (payload.get("signal") or "").upper()
-    symbol = safe_symbol(payload.get("symbol") or "")
-    confidence = int(payload.get("confidence") or 2)
+    signal = str(payload.get("signal", "")).upper()  # BUY / SELL
+    symbol_in = payload.get("symbol") or SYMBOL_FALLBACK
+    symbol = normalize_symbol(symbol_in)
 
-    # BUY / SELL
-    if signal not in ("BUY", "SELL"):
-        return ("ignored", 200)
-
-    # solde EUR
     try:
-        eur_free = quote_available_eur()
+        kraken.load_markets()
     except Exception as e:
-        app.logger.error(f"balance error: {e}")
-        return ("balance error", 502)
+        app.logger.exception("load_markets failed")
+        return jsonify({"ok": False, "error": f"markets: {e}"}), 502
 
-    # montant
-    eur_to_spend = decide_eur_amount(confidence)
-    if signal == "SELL":
-        # pour SELL, on vend une fraction de la position (ex: 100% si force_close)
-        # ici simple: on vend le max disponible du base asset
-        base = symbol.split("/")[0]
-        bal = kraken.fetch_balance().get(base, {})
-        amt = float(bal.get("free", 0) or 0)
-        if amt <= 0:
-            return ("no base to sell", 200)
+    # --- BUY ---
+    if signal == "BUY":
         try:
-            order = kraken.create_order(symbol, "market", "sell", amt)
-            app.logger.info(f"sell done | {order.get('id','?')}")
-            return jsonify({"ok": True, "side": "sell", "id": order.get("id")})
+            min_cost_req = min_cost(symbol)
+            budget = max(BASE_ORDER_EUR, min_cost_req)
+
+            amount, price, mkt = amount_from_eur(symbol, budget)
+            amount = max(amount, min_amount(symbol))
+            if budget < min_cost_req:
+                budget = min_cost_req  # sécurité si marché impose un cost plus élevé
+
+            # Vérifie solde EUR
+            bal = kraken.fetch_free_balance()
+            eur_free = float(bal.get("EUR", 0) or 0)
+            if eur_free + 1e-6 < budget:
+                return jsonify({"ok": False, "skipped": "insufficient-eur",
+                                "eur_free": eur_free, "need": budget}), 200
+
+            order = kraken.create_order(symbol, "market", "buy", amount)
+            return jsonify({"ok": True, "side": "buy", "symbol": symbol,
+                            "amount": amount, "price": price, "order": order})
         except Exception as e:
-            app.logger.error(f"sell error: {e}")
-            return ("sell error", 502)
+            app.logger.exception("buy error")
+            return jsonify({"ok": False, "error": str(e)}), 500
 
-    # BUY
-    # si pas assez d’EUR, on ajuste ou on skip
-    if eur_to_spend > eur_free:
-        eur_to_spend = eur_free
-    if eur_to_spend < MIN_NOTIONAL_EUR:
-        app.logger.info(f"skip buy | eur_to_spend={eur_to_spend} < {MIN_NOTIONAL_EUR}")
-        return ("skip small", 200)
+    # --- SELL ---
+    if signal == "SELL":
+        try:
+            base_free = free_base(symbol)
+            min_amt = min_amount(symbol)
+            sell_amt = max(0.0, base_free - min_amt*0.1)  # garde un poil de dust
+            if sell_amt < min_amt:
+                return jsonify({"ok": False, "skipped": "insufficient-base",
+                                "base_free": base_free, "min": min_amt}), 200
+            order = kraken.create_order(symbol, "market", "sell", float(kraken.amount_to_precision(symbol, sell_amt)))
+            return jsonify({"ok": True, "side": "sell", "symbol": symbol,
+                            "amount": float(kraken.amount_to_precision(symbol, sell_amt)), "order": order})
+        except Exception as e:
+            app.logger.exception("sell error")
+            return jsonify({"ok": False, "error": str(e)}), 500
 
-    try:
-        res = create_market_order(symbol, "buy", eur_to_spend)
-        if res.get("skipped"):
-            return ("skip small", 200)
-        order = res["order"]
-        app.logger.info(f"buy done | {order.get('id','?')}")
-        return jsonify({"ok": True, "side": "buy", "id": order.get("id")})
-    except Exception as e:
-        app.logger.error(f"buy error: {e}")
-        return ("buy error", 502)
+    return jsonify({"ok": False, "error": f"unknown-signal:{signal}"}), 400
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
