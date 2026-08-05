@@ -277,6 +277,8 @@ def _monitor_trailing(symbol: str, qty: float, entry: float, conf: int, base_sl_
             log.warning("[TRAIL] error: %s", e)
             time.sleep(3)
     log.info("[TRAIL] finished")
+
+
 def _remember_alert(alert_id: str) -> bool:
     """
     Enregistre un identifiant d'alerte.
@@ -293,6 +295,23 @@ def _remember_alert(alert_id: str) -> bool:
             _seen_alerts.popitem(last=False)
 
         return True
+        
+def _validate_orion_payload(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    """
+    Validation ORION Protocol v1.
+    Retourne :
+        (True, "") si tout est valide
+        (False, "raison") sinon
+    """
+
+    protocol = str(payload.get("protocol", ""))
+
+    if protocol != ORION_PROTOCOL:
+        return False, "invalid_protocol"
+
+    return True, ""
+
+
 # ===== Routes =====
 @app.get("/")
 def index():
@@ -497,3 +516,4 @@ _load_state()
 if __name__ == "__main__":
     port = int(os.getenv("PORT","10000"))
     app.run(host="0.0.0.0", port=port)
+
