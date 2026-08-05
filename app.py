@@ -1,8 +1,16 @@
-import os, json, math, time, threading, logging
+import os
+import json
+import math
+import time
+import threading
+import logging
+
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Any, Dict, Tuple, Optional, Callable
 from flask import Flask, request, jsonify
 import ccxt
+
 
 # ===== Helpers ENV =====
 def env_str(name: str, default: str = "") -> str:
@@ -63,6 +71,21 @@ ENABLE_SHORTING        = env_str("ENABLE_SHORTING","false").lower() in ("1","tru
 MARGIN_LEVERAGE        = max(1, env_int("MARGIN_LEVERAGE", 2))
 ALLOW_PAYLOAD_SYMBOL   = env_str("ALLOW_PAYLOAD_SYMBOL","false").lower() in ("1","true","yes")
 
+# ===== ORION Protocol v1 =====
+APP_VERSION = env_str("APP_VERSION", "1.0.0-dev")
+ORION_PROTOCOL = env_str("ORION_PROTOCOL", "orion-v1")
+
+ALERT_MAX_AGE_SEC = env_int("ALERT_MAX_AGE_SEC", 120)
+MIN_CONFIDENCE = env_int("MIN_CONFIDENCE", 60)
+MAX_PRICE_DEVIATION_PCT = env_float(
+    "MAX_PRICE_DEVIATION_PCT",
+    0.005,
+)
+MAX_SEEN_ALERTS = max(
+    100,
+    env_int("MAX_SEEN_ALERTS", 2000),
+)
+
 # ===== Logs/Flask/State =====
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("tv-kraken")
@@ -70,6 +93,8 @@ app = Flask(__name__)
 
 _state_lock = threading.Lock()
 _position_lock = threading.Lock()
+_seen_alerts_lock = threading.Lock()
+_seen_alerts = OrderedDict()
 _state: Dict[str, Any] = {
     "has_position": False,         # True si long ouvert
     "last_buy_ts": 0.0,
@@ -252,7 +277,22 @@ def _monitor_trailing(symbol: str, qty: float, entry: float, conf: int, base_sl_
             log.warning("[TRAIL] error: %s", e)
             time.sleep(3)
     log.info("[TRAIL] finished")
+def _remember_alert(alert_id: str) -> bool:
+    """
+    Enregistre un identifiant d'alerte.
 
+    Retourne False si l'alerte a déjà été reçue.
+    """
+    with _seen_alerts_lock:
+        if alert_id in _seen_alerts:
+            return False
+
+        _seen_alerts[alert_id] = time.time()
+
+        while len(_seen_alerts) > MAX_SEEN_ALERTS:
+            _seen_alerts.popitem(last=False)
+
+        return True
 # ===== Routes =====
 @app.get("/")
 def index():
@@ -262,11 +302,15 @@ def index():
 def health():
     return jsonify({
         "status": "ok",
+        "service": "orion",
+        "version": APP_VERSION,
+        "protocol": ORION_PROTOCOL,
         "symbol_default": SYMBOL_DEFAULT,
         "creds_ok": bool(API_KEY and API_SECRET),
         "secret_set": bool(WEBHOOK_SECRET),
         "dry_run": DRY_RUN,
         "shorting": ENABLE_SHORTING,
+        "has_position": bool(_state["has_position"]),
         "ts": int(time.time())
     }), 200
 
@@ -449,6 +493,7 @@ def webhook():
 
 # ===== Boot =====
 _load_state()
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT","10000"))
     app.run(host="0.0.0.0", port=port)
