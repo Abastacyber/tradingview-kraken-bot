@@ -335,9 +335,12 @@ def _validate_orion_payload(
         return False, "invalid_alert_id"
 
     # 4. Vérification du symbole
-    symbol = _normalize_to_ccxt_symbol(
-        str(payload.get("symbol", ""))
-    )
+    raw_symbol = str(payload.get("symbol", "")).strip()
+
+    if not raw_symbol:
+        return False, "missing_symbol"
+
+    symbol = _normalize_to_ccxt_symbol(raw_symbol)
 
     if symbol != SYMBOL_DEFAULT:
         return False, "invalid_symbol"
@@ -369,16 +372,17 @@ def _validate_orion_payload(
     if not math.isfinite(price) or price <= 0:
         return False, "invalid_price"
 
-    # 8. Vérification de l'horodatage de la bougie
+
+    # 8. Vérification de l'heure réelle d'envoi
     try:
-        bar_time_ms = int(payload.get("bar_time"))
+        sent_at_ms = int(payload.get("sent_at"))
     except (TypeError, ValueError):
-        return False, "invalid_bar_time"
+        return False, "invalid_sent_at"
 
-    if bar_time_ms <= 0:
-        return False, "invalid_bar_time"
+    if sent_at_ms <= 0:
+        return False, "invalid_sent_at"
 
-    alert_time_sec = bar_time_ms / 1000.0
+    alert_time_sec = sent_at_ms / 1000.0
     alert_age_sec = time.time() - alert_time_sec
 
     if alert_age_sec > ALERT_MAX_AGE_SEC:
@@ -395,23 +399,60 @@ def _validate_orion_payload(
         except (TypeError, ValueError):
             return False, "invalid_stop_price"
 
-        if not math.isfinite(stop_price) or stop_price <= 0:
+        if stop_price <= 0:
             return False, "invalid_stop_price"
 
         if stop_price >= price:
-            return False, "stop_price_not_below_entry"
+            return False, "stop_loss_above_entry"
 
         stop_distance_pct = (price - stop_price) / price
 
         if stop_distance_pct > MAX_SL_PCT:
             return False, "stop_loss_too_wide"
 
-    # 10. Protection contre les alertes dupliquées
-    if not _remember_alert(alert_id):
-        return False, "duplicate_alert"
-
     return True, ""
 
+# ===== ORION Decision Engine =====
+def _orion_decide(
+    payload: Dict[str, Any],
+) -> Tuple[str, str]:
+    """
+    Première couche du moteur de décision ORION.
+
+    Retourne :
+        ("execute", "reason") -> le trade peut continuer
+        ("reject", "reason")  -> le trade doit être refusé
+        ("wait", "reason")    -> réservé aux futures décisions ORION
+
+    Cette version reste volontairement prudente.
+    Elle prépare l'architecture du futur cerveau ORION
+    sans encore remplacer la stratégie TradingView.
+    """
+
+    signal = str(
+        payload.get("signal", "")
+    ).strip().upper()
+
+    confidence = int(
+        payload.get("confidence", 0)
+    )
+
+    # PING n'est jamais une décision de trading.
+    if signal == "PING":
+        return "reject", "ping_not_trade"
+
+    # Sécurité supplémentaire.
+    if signal not in {"BUY", "SELL"}:
+        return "reject", "unsupported_signal"
+
+    # Première règle décisionnelle ORION.
+    # Une confiance insuffisante ne doit jamais atteindre Kraken.
+    if confidence < MIN_CONFIDENCE:
+        return "reject", "confidence_below_orion_threshold"
+
+    # Pour cette première version,
+    # ORION autorise le trade après les contrôles précédents.
+    return "execute", "orion_v1_pass"
 
 # ===== Routes =====
 @app.get("/")
@@ -475,14 +516,73 @@ def webhook():
                     "reason": validation_error,
                     "protocol_expected": ORION_PROTOCOL,
                 }), 400
-            signal = (payload.get("signal") or "").upper()
-            if signal == "PING":
-                return jsonify({"ok": True, "pong": True, "ts": int(time.time())}), 200
-            if signal not in {"BUY","SELL"}:
-                return jsonify({"error":"signal invalide (BUY/SELL/PING)"}), 400
 
-            symbol = _maybe_symbol_from_payload(payload.get("symbol"))
-            conf = int(payload.get("confidence") or payload.get("indicators_count") or 2)
+            signal = str(
+                payload.get("signal", "")
+            ).strip().upper()
+
+            # PING = simple test de communication.
+            # Il ne doit pas être enregistré comme une alerte de trading.
+            if signal == "PING":
+                return jsonify({
+                    "ok": True,
+                    "pong": True,
+                    "protocol": ORION_PROTOCOL,
+                    "ts": int(time.time()),
+                }), 200
+
+            # Protection contre les alertes reçues plusieurs fois.
+            alert_id = str(
+                payload.get("alert_id", "")
+            ).strip()
+
+            if not _remember_alert(alert_id):
+                log.warning(
+                    "Duplicate ORION alert rejected: %s",
+                    alert_id,
+                )
+                return jsonify({
+                    "accepted": False,
+                    "decision": "rejected",
+                    "reason": "duplicate_alert",
+                    "alert_id": alert_id,
+                }), 409
+
+            # Sécurité supplémentaire, même si le validateur
+            # a déjà vérifié le signal.
+            if signal not in {"BUY", "SELL"}:
+                return jsonify({
+                    "accepted": False,
+                    "decision": "rejected",
+                    "reason": "invalid_signal",
+                    "allowed_signals": ["BUY", "SELL", "PING"],
+                }), 400
+            # ===== ORION Decision Gate =====
+            decision, decision_reason = _orion_decide(payload)
+
+            log.info(
+                "ORION decision=%s reason=%s alert_id=%s",
+                decision,
+                decision_reason,
+                alert_id,
+            )
+
+            if decision != "execute":
+                return jsonify({
+                    "accepted": True,
+                    "decision": decision,
+                    "reason": decision_reason,
+                    "alert_id": alert_id,
+                }), 200
+            symbol = _maybe_symbol_from_payload(
+                payload.get("symbol")
+            )
+
+            conf = int(
+                payload.get("confidence")
+                or payload.get("indicators_count")
+                or 2
+            )
             reason = str(payload.get("reason",""))[:160]
             tp_pct, sl_pct = _tp_sl_from_confidence(conf)
 
