@@ -295,7 +295,8 @@ def _remember_alert(alert_id: str) -> bool:
             _seen_alerts.popitem(last=False)
 
         return True
-        
+
+
 def _validate_orion_payload(payload: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Validation ORION Protocol v1.
@@ -361,7 +362,19 @@ def webhook():
 
             safe = dict(payload); safe.pop("secret", None); safe.pop("token", None)
             log.info("Webhook payload: %s", json.dumps(safe, ensure_ascii=False))
+            is_valid, validation_error = _validate_orion_payload(payload)
 
+            if not is_valid:
+                log.warning(
+                    "ORION payload rejected: %s",
+                    validation_error,
+                )
+                return jsonify({
+                    "accepted": False,
+                    "decision": "rejected",
+                    "reason": validation_error,
+                    "protocol_expected": ORION_PROTOCOL,
+                }), 400
             signal = (payload.get("signal") or "").upper()
             if signal == "PING":
                 return jsonify({"ok": True, "pong": True, "ts": int(time.time())}), 200
