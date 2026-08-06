@@ -297,18 +297,118 @@ def _remember_alert(alert_id: str) -> bool:
         return True
 
 
-def _validate_orion_payload(payload: Dict[str, Any]) -> Tuple[bool, str]:
+def _validate_orion_payload(
+    payload: Dict[str, Any],
+) -> Tuple[bool, str]:
     """
-    Validation ORION Protocol v1.
+    Valide un message ORION Protocol v1.
+
     Retourne :
-        (True, "") si tout est valide
-        (False, "raison") sinon
+        (True, "") si le message est valide.
+        (False, "raison") si le message doit être refusé.
     """
 
-    protocol = str(payload.get("protocol", ""))
+    # 1. Vérification du protocole
+    protocol = str(payload.get("protocol", "")).strip()
 
     if protocol != ORION_PROTOCOL:
         return False, "invalid_protocol"
+
+    # 2. Vérification du signal
+    signal = str(payload.get("signal", "")).strip().upper()
+
+    if signal not in {"BUY", "SELL", "PING"}:
+        return False, "invalid_signal"
+
+    # PING est seulement un test de communication.
+    # Il n'a pas besoin des informations d'un trade.
+    if signal == "PING":
+        return True, ""
+
+    # 3. Vérification de l'identifiant unique
+    alert_id = str(payload.get("alert_id", "")).strip()
+
+    if not alert_id:
+        return False, "missing_alert_id"
+
+    if len(alert_id) > 160:
+        return False, "invalid_alert_id"
+
+    # 4. Vérification du symbole
+    symbol = _normalize_to_ccxt_symbol(
+        str(payload.get("symbol", ""))
+    )
+
+    if symbol != SYMBOL_DEFAULT:
+        return False, "invalid_symbol"
+
+    # 5. Vérification du timeframe
+    timeframe = str(payload.get("timeframe", "")).strip()
+
+    if timeframe != "15":
+        return False, "invalid_timeframe"
+
+    # 6. Vérification de la confiance
+    try:
+        confidence = int(payload.get("confidence"))
+    except (TypeError, ValueError):
+        return False, "invalid_confidence"
+
+    if confidence < 0 or confidence > 100:
+        return False, "invalid_confidence"
+
+    if confidence < MIN_CONFIDENCE:
+        return False, "confidence_too_low"
+
+    # 7. Vérification du prix TradingView
+    try:
+        price = float(payload.get("price"))
+    except (TypeError, ValueError):
+        return False, "invalid_price"
+
+    if not math.isfinite(price) or price <= 0:
+        return False, "invalid_price"
+
+    # 8. Vérification de l'horodatage de la bougie
+    try:
+        bar_time_ms = int(payload.get("bar_time"))
+    except (TypeError, ValueError):
+        return False, "invalid_bar_time"
+
+    if bar_time_ms <= 0:
+        return False, "invalid_bar_time"
+
+    alert_time_sec = bar_time_ms / 1000.0
+    alert_age_sec = time.time() - alert_time_sec
+
+    if alert_age_sec > ALERT_MAX_AGE_SEC:
+        return False, "stale_alert"
+
+    # Tolérance de 30 secondes en cas de léger décalage d'horloge.
+    if alert_age_sec < -30:
+        return False, "future_alert"
+
+    # 9. Vérification du Stop Loss pour un BUY
+    if signal == "BUY":
+        try:
+            stop_price = float(payload.get("stop_price"))
+        except (TypeError, ValueError):
+            return False, "invalid_stop_price"
+
+        if not math.isfinite(stop_price) or stop_price <= 0:
+            return False, "invalid_stop_price"
+
+        if stop_price >= price:
+            return False, "stop_price_not_below_entry"
+
+        stop_distance_pct = (price - stop_price) / price
+
+        if stop_distance_pct > MAX_SL_PCT:
+            return False, "stop_loss_too_wide"
+
+    # 10. Protection contre les alertes dupliquées
+    if not _remember_alert(alert_id):
+        return False, "duplicate_alert"
 
     return True, ""
 
