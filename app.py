@@ -172,19 +172,42 @@ def _make_exchange():
 @lru_cache(maxsize=1)
 def _load_markets(ex): return ex.load_markets()
 
-def _amount_step_from_market(market: Dict[str, Any]) -> Optional[float]:
-    precision = (market.get("precision") or {}).get("amount")
+def _amount_step_from_market(
+    market: Dict[str, Any],
+) -> Optional[float]:
+
+    precision = (
+        market.get("precision") or {}
+    ).get("amount")
+
     if precision is not None:
-        try: return 10 ** (-int(precision))
-        except: pass
+        try:
+            precision = float(precision)
+
+            # CCXT peut fournir directement le pas minimal.
+            if 0 < precision < 1:
+                return precision
+
+            # Compatibilité avec un format exprimé en décimales.
+            if precision >= 1:
+                return 10 ** (-int(precision))
+
+        except (TypeError, ValueError, OverflowError):
+            pass
+
     info = market.get("info") or {}
-    for k in ("lotSz","lotSize","qtyStep","minQty"):
-        if k in info:
+
+    for key in ("lotSz", "lotSize", "qtyStep", "minQty"):
+        if key in info:
             try:
-                val = float(info[k])
-                if val > 0: return val
-            except: continue
+                value = float(info[key])
+                if value > 0:
+                    return value
+            except (TypeError, ValueError):
+                continue
+
     return None
+
 
 def _get_min_trade_info(ex, symbol: str, price: float) -> Tuple[float, float, Optional[float]]:
     markets = _load_markets(ex)
