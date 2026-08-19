@@ -687,41 +687,42 @@ def webhook():
 
             # ============= SELL (close long OR open short) =============
             if signal == "SELL":
-                balances = ex.fetch_free_balance()
+
                 # En DRY_RUN, fermer d'abord la position longue simulée.
-if DRY_RUN:
-    st = dict(_state)
+                if DRY_RUN:
+                    st = dict(_state)
 
-    if (
-        st.get("position_side") == "long"
-        and st.get("has_position")
-        and st.get("last_qty", 0) > 0
-    ):
-        qty_to_sell = float(st["last_qty"])
+                    if (
+                        st.get("position_side") == "long"
+                        and st.get("has_position")
+                        and st.get("last_qty", 0) > 0
+                    ):
+                        qty_to_sell = float(st["last_qty"])
+                        order = {
+                            "dry_run": True,
+                            "side": "sell",
+                            "symbol": symbol,
+                            "qty": qty_to_sell,
+                        }
 
-        order = {
-            "dry_run": True,
-            "side": "sell",
-            "symbol": symbol,
-            "qty": qty_to_sell,
-        }
+                        _with_state(
+                            lambda s: s.update({
+                                "has_position": False,
+                                "position_side": "none",
+                                "last_qty": 0.0,
+                            })
+                        )
 
-        _with_state(
-            lambda s: s.update({
-                "has_position": False,
-                "position_side": "none",
-                "last_qty": 0.0,
-            })
-        )
+                        return jsonify({
+                            "ok": True,
+                            "side": "sell-close-long",
+                            "symbol": symbol,
+                            "amount": qty_to_sell,
+                            "order": order,
+                            "reason": reason,
+                        }), 200
 
-        return jsonify({
-            "ok": True,
-            "side": "sell-close-long",
-            "symbol": symbol,
-            "amount": qty_to_sell,
-            "order": order,
-            "reason": reason,
-        }), 200
+                balances = ex.fetch_free_balance()
                 base = symbol.split("/")[0]
                 base_free = float(balances.get(base, 0.0))
 
