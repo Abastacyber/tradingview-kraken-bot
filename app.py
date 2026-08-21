@@ -1,9 +1,312 @@
+Texte collé(20260821-193339).txt
+Document
+ Je te donne à nouveau le feature/orion-protocol
+
+
+Texte collé(20260821-194545).txt
+Document
+pour le moemment valids tu  
+Texte collé(20260821-194955).txt
+Document
+Dis moi si mon code est OK pour le moment
+Texte collé(20260821-195449).txt
+Document
+ et maintenant ? 
+
+Si non donne moi les modifications exactes à effectuer
+Texte collé(20260821-195955).txt
+Document
+On va étape par étape : et maintenant  ? 
+Texte collé(20260821-200615).txt
+Document
+Texte collé(20260821-200804).txt
+Document
+OK et que penses tu de ce code ? 
+
+Oui, ce code est nettement meilleur que la version précédente. Je viens aussi de vérifier le fichier complet : la syntaxe Python est valide, il compile correctement.
+
+Mais je ne le considérerais pas encore comme validé pour le LIVE. Pour du DRY_RUN, on est proche. Il reste surtout 4 points importants, dont 2 critiques.
+
+1. ✅ position_id : très bonne évolution
+
+Cette partie est bien conçue :
+
+current = _get_state_snapshot()
+if current.get("position_id") != position_id or not current.get("has_position"):
+    ...
+    return
+
+Un vieux thread voit désormais qu'il ne correspond plus à la position active et s'arrête. C'est exactement la logique que nous voulions.
+
+Les ouvertures LONG et SHORT créent aussi chacune leur UUID et les fermetures remettent bien :
+
+"position_id": None
+
+Donc sur ce point : OK.
+
+2. ⚠️ Le stop_price est enfin utilisé… mais pas exactement comme prévu
+
+C'est une vraie amélioration :
+
+real_sl_pct = _stop_pct_from_price(vwap, stop_price_val)
+effective_sl_pct = real_sl_pct if real_sl_pct is not None else sl_pct
+
+Donc le stop Pine n'est plus simplement jeté. ✅
+
+Mais juste après :
+
+effective_sl_pct = min(effective_sl_pct, MAX_SL_PCT, RISK_PCT)
+
+Avec :
+
+MAX_SL_PCT = 0.05
+RISK_PCT = 0.02
+
+ça signifie qu'un stop Pine situé à -4 % devient réellement un stop à -2 %.
+
+Exemple :
+
+Entrée réelle : 60 000 €
+Stop Pine :     57 600 €   (-4 %)
+
+
+ORION transforme :
+effective_sl_pct = min(4 %, 5 %, 2 %)
+
+
+=> stop réel = -2 %
+=> 58 800 €
+
+Donc on a amélioré le problème, mais ORION modifie encore silencieusement le stop Pine.
+
+Je préfère notre principe initial : si Pine demande un stop valide à 4 %, ORION doit soit l'accepter, soit le refuser explicitement. Pas le transformer silencieusement.
+
+3. 🔴 Problème plus important : un SELL Kraken peut échouer mais ORION efface quand même la position
+
+Dans _monitor_trailing() :
+
+try:
+    ...
+    if not DRY_RUN:
+        ex.create_market_sell_order(symbol, q)
+except Exception as e:
+    log.warning("[TRAIL] SELL initial failed: %s", e)
+
+
+_with_state(lambda s: (
+    s.update({
+        "has_position": False,
+        ...
+    })
+))
+
+C'est dangereux en LIVE.
+
+Scénario :
+
+Stop atteint
+↓
+ORION tente SELL
+↓
+Kraken refuse / timeout / API indisponible
+↓
+exception capturée
+↓
+ORION met quand même :
+has_position = False
+position_id = None
+last_qty = 0
+
+ORION croit alors que la position est fermée alors que les BTC peuvent toujours être sur Kraken.
+
+Ça, je veux absolument le corriger avant le LIVE.
+
+En DRY_RUN, aucun problème.
+
+4. 🔴 Le position_id réduit le risque de double SELL, mais ne l'élimine pas complètement
+
+Le thread fait :
+
+current = _get_state_snapshot()
+
+
+if current.get("position_id") != position_id:
+    return
+
+Puis il va chercher le ticker.
+
+Entre ces deux moments, ceci peut arriver :
+
+Thread trailing vérifie position A → OK
+                  ↓
+Webhook SELL ferme position A
+                  ↓
+Thread reçoit le ticker
+                  ↓
+stop atteint
+                  ↓
+create_market_sell_order()
+
+Donc il manque encore une ultime vérification atomique immédiatement avant le SELL.
+
+Nous avions justement évoqué _position_lock.
+
+Par exemple :
+
+with _position_lock:
+    current = _get_state_snapshot()
+
+
+    if (
+        current.get("position_id") != position_id
+        or not current.get("has_position")
+    ):
+        return
+
+
+    # seulement maintenant : SELL
+
+Ça empêchera un webhook SELL et le trailing de vendre simultanément.
+
+5. Autre problème LIVE important que je veux garder dans notre radar
+
+Ton SELL réel contient encore :
+
+base_free = float(balances.get(base, 0.0))
+...
+qty_to_sell = max(0.0, base_free - BASE_RESERVE)
+
+Donc en LIVE, ORION ne vend pas nécessairement la quantité de sa position.
+
+Il vend potentiellement tout le BTC libre du compte Kraken.
+
+Imaginons :
+
+BTC déjà possédés personnellement : 0,1 BTC
+ORION achète :                    0,0005 BTC
+
+Un SELL ORION pourrait essayer de vendre environ :
+
+0,1005 BTC
+
+au lieu de :
+
+0,0005 BTC
+
+C'est un bloqueur LIVE majeur. À terme le SELL doit être basé sur la position suivie :
+
+last_qty
+
+avec réconciliation Kraken, pas sur la totalité de base_free.
+
+6. Un autre comportement à décider
+
+Actuellement, ORION peut refaire un BUY alors qu'un LONG existe déjà une fois le cooldown expiré.
+
+Il n'y a pas de règle du genre :
+
+if st.get("has_position") and st.get("position_side") == "long":
+    return already_long
+
+Le nouveau BUY écraserait alors :
+
+last_qty
+position_id
+last_entry_price
+
+alors que l'ancienne quantité BTC existe toujours.
+
+Pour notre modèle actuel une seule position LONG ORION à la fois, il faudra bloquer ça.
+
+Mon verdict
+
+Je mettrais aujourd'hui :
+
+Architecture : 8/10
+DRY_RUN : presque prêt
+LIVE : pas encore
+
+Les améliorations position_id, utilisation du stop_price, nouvelle échelle de confidence et logs sont réellement bonnes.
+
+Je ne changerais plus dix choses à la fois.
+
+Prochaine modification unique que je ferais : sécuriser le SELL du trailing avec _position_lock et surtout ne jamais mettre has_position=False si l'ordre Kraken a échoué.
+
+C'est maintenant le risque technique le plus important à éliminer. Ensuite on corrigera proprement le comportement exact du stop_price.
+
+OK peux tu me proposer une version hydride entre ce que je t'ai envoyé et ce que tu m'as proposé ?
+
+Oui. J’ai préparé une version hybride qui garde les bonnes idées de ton code tout en intégrant les sécurités que je voulais ajouter. Elle compile correctement en Python.
+
+Elle conserve notamment ton position_id, ton stop_price Pine, le trailing, la logique DRY_RUN et ton architecture ORION actuelle.
+
+J’ai ajouté/corrigé les points importants suivants : le stop Pine est maintenant utilisé comme prix absolu lorsqu’il reste cohérent avec le VWAP réel, sans être automatiquement resserré par RISK_PCT; le trailing re-vérifie la position sous _position_lock juste avant un SELL; si Kraken refuse le SELL, ORION garde la position ouverte; un ancien thread ne peut plus fermer une nouvelle position; un nouveau BUY est refusé si ORION est déjà LONG; et surtout, un SELL réel ne vend plus tout le BTC libre du compte, mais uniquement last_qty, c’est-à-dire la quantité suivie par ORION.
+
+J’ai quand même gardé un fallback à 0,5 % si, après le fill, le stop envoyé par Pine devient incohérent. La réponse du BUY indique maintenant clairement ce qui a été utilisé avec :
+
+"initial_stop": ...,
+"sl_pct_used": ...,
+"stop_source": "pine_stop"
+
+ou un stop_source de type fallback_.... Ça nous permettra de vérifier immédiatement dans les tests si le stop ATR est réellement respecté.
+
+Voici la version complète :
+
+Télécharger app.py – version hybride sécurisée
+
+Je te conseille de partir de celle-ci plutôt que des deux versions précédentes.
+
+Et on garde notre méthode : ne la déploie pas directement en LIVE. La prochaine étape devrait être de la mettre sur feature/orion-protocol-v1, laisser DRY_RUN=true, puis faire un seul test BUY avec un stop_price volontairement identifiable pour vérifier que la réponse retourne bien exactement ce stop. 
+
+app_orion_hybride_safe.py
+Code
+OK peux tu me proposer une version hydride entre ce que je t'ai envoyé et ce que tu m'as proposé ?  
+
+Oui — c’est justement la version que je viens de préparer.
+
+Elle combine ton code actuel avec les sécurités que je t’ai proposées, sans bouleverser toute l’architecture ORION.
+
+👉 
+Télécharger la version hybride de app.py
+
+Elle conserve :
+
+position_id
+le stop_price envoyé par Pine
+le trailing actuel
+les profils de confiance existants
+le fonctionnement DRY_RUN
+l’architecture orion-v1
+
+Et elle ajoute notamment :
+
+arrêt des anciens threads de trailing ;
+verrouillage juste avant un SELL ;
+état conservé si Kraken refuse réellement la vente ;
+SELL limité à la quantité ORION last_qty, pas à tous les BTC du compte ;
+blocage d’un deuxième LONG si un LONG ORION existe déjà ;
+utilisation réelle du stop Pine sans le transformer silencieusement avec RISK_PCT ;
+retour de initial_stop, sl_pct_used et stop_source pour contrôler nos tests.
+
+Je te recommande de prendre ce fichier comme nouvelle base feature/orion-protocol-v1.
+
+Ensuite on ne change plus rien : on fait un seul test DRY_RUN BUY, avec un stop volontairement identifiable, et on vérifie ensemble le résultat avant de continuer.
+
+app_orion_hybride_safe.py
+Code
+
+Bibliothèque
+/
+ORION PROJECT
+/
+app_orion_hybride_safe.py
 import os
 import json
 import math
 import time
 import threading
 import logging
+import uuid
 
 from collections import OrderedDict
 from functools import lru_cache
@@ -101,6 +404,7 @@ _state: Dict[str, Any] = {
     "last_entry_price": 0.0,
     "last_qty": 0.0,
     "position_side": "none",       # "none" | "long" | "short"
+    "position_id": None,           # identifiant unique de la position courante
     "symbol": SYMBOL_DEFAULT,
 }
 
@@ -130,6 +434,10 @@ def _with_state(mutator: Callable[[Dict[str, Any]], None]):
     _save_state()
     return snap
 
+def _get_state_snapshot() -> Dict[str, Any]:
+    with _state_lock:
+        return dict(_state)
+
 # ===== Exchange helpers =====
 def _assert_env():
     if EXCHANGE_NAME != "kraken":
@@ -154,7 +462,7 @@ def _normalize_to_ccxt_symbol(s: str) -> str:
 def _maybe_symbol_from_payload(payload_symbol: Optional[str]) -> str:
     if ALLOW_PAYLOAD_SYMBOL and payload_symbol:
         return _normalize_to_ccxt_symbol(payload_symbol)
-    return _state.get("symbol", SYMBOL_DEFAULT)
+    return _get_state_snapshot().get("symbol", SYMBOL_DEFAULT)
 
 def _make_exchange():
     _assert_env()
@@ -247,59 +555,198 @@ def _compute_base_qty_for_quote(ex, symbol: str, quote_amt: float) -> Tuple[floa
     return qty, price
 
 def _tp_sl_from_confidence(conf: int) -> Tuple[float, float]:
-    return (0.008, 0.005) if conf >= 3 else (0.003, 0.002)
+    """
+    Paramètres provisoires ORION v1.
+
+    Confidence sur 0-100.
+    tp_pct est conservé pour compatibilité, mais n'est pas encore utilisé.
+    sl_pct sert uniquement de repli si le stop_price Pine est inutilisable.
+    """
+    conf = max(0, min(100, int(conf)))
+    return 0.008, 0.005
+
 
 def _trail_params(conf: int) -> Tuple[float, float]:
-    return ((TRAIL_ACTIVATE_PCT_CONF3, TRAIL_GAP_CONF3) if conf >= 3 else (TRAIL_ACTIVATE_PCT_CONF2, TRAIL_GAP_CONF2))
+    """
+    Trailing provisoire sur l'échelle ORION 0-100.
+
+    60-84  : profil standard
+    85-100 : forte confluence
+
+    Le seuil 85 reste provisoire et devra être calibré par backtest.
+    """
+    conf = max(0, min(100, int(conf)))
+
+    if conf >= 85:
+        return (TRAIL_ACTIVATE_PCT_CONF3, TRAIL_GAP_CONF3)
+
+    return (TRAIL_ACTIVATE_PCT_CONF2, TRAIL_GAP_CONF2)
+
+
+def _resolve_initial_stop(
+    entry_price: float,
+    stop_price: Optional[float],
+    fallback_sl_pct: float,
+) -> Tuple[float, float, str]:
+    """
+    Détermine le stop initial réellement utilisé.
+
+    Priorité :
+      1) stop_price absolu envoyé par Pine s'il reste cohérent avec le VWAP réel ;
+      2) fallback historique si le stop Pine devient incohérent après exécution.
+
+    Aucun RISK_PCT n'est appliqué silencieusement au stop Pine.
+    MAX_SL_PCT reste le garde-fou maximal.
+    """
+    fallback_sl_pct = min(max(float(fallback_sl_pct), 0.0), MAX_SL_PCT)
+    fallback_stop = entry_price * (1.0 - fallback_sl_pct)
+
+    if entry_price <= 0:
+        return fallback_stop, fallback_sl_pct, "fallback_invalid_entry"
+
+    try:
+        sp = float(stop_price)
+    except (TypeError, ValueError):
+        return fallback_stop, fallback_sl_pct, "fallback_missing_stop"
+
+    if not math.isfinite(sp) or sp <= 0 or sp >= entry_price:
+        return fallback_stop, fallback_sl_pct, "fallback_incoherent_stop"
+
+    distance_pct = (entry_price - sp) / entry_price
+
+    if distance_pct <= 0 or distance_pct > MAX_SL_PCT:
+        return fallback_stop, fallback_sl_pct, "fallback_stop_outside_guard"
+
+    return sp, distance_pct, "pine_stop"
+
+
+def _position_is_current(position_id: str) -> bool:
+    current = _get_state_snapshot()
+    return bool(
+        current.get("has_position")
+        and current.get("position_side") == "long"
+        and current.get("position_id") == position_id
+    )
+
+
+def _clear_position_if_current(position_id: str):
+    _with_state(lambda s: (
+        s.update({
+            "has_position": False,
+            "position_side": "none",
+            "position_id": None,
+            "last_qty": 0.0,
+        })
+        if s.get("position_id") == position_id else None
+    ))
+
 
 # ===== Trailing (long only, simple) =====
-def _monitor_trailing(symbol: str, qty: float, entry: float, conf: int, base_sl_pct: float):
-    if not TRAILING_ENABLED or qty <= 0: return
+def _monitor_trailing(
+    symbol: str,
+    qty: float,
+    entry: float,
+    conf: int,
+    initial_stop: float,
+    position_id: str,
+):
+    if not TRAILING_ENABLED or qty <= 0:
+        return
+
     ex = _make_exchange()
     activate_pct, gap = _trail_params(conf)
     max_price = entry
-    base_sl_pct = min(base_sl_pct, MAX_SL_PCT)
-    initial_stop = entry * (1.0 - base_sl_pct)
     activated = False
-    log.info("[TRAIL] start %s qty=%.8f entry=%.2f conf=%s baseSL=%.4f", symbol, qty, entry, conf, base_sl_pct)
+
+    log.info(
+        "[TRAIL] start %s qty=%.8f entry=%.2f stop=%.2f conf=%s position_id=%s",
+        symbol, qty, entry, initial_stop, conf, position_id,
+    )
+
     while True:
+        if not _position_is_current(position_id):
+            log.info(
+                "[TRAIL] position périmée position_id=%s -> arrêt",
+                position_id,
+            )
+            return
+
         try:
             t = ex.fetch_ticker(symbol)
             last = float(t.get("last") or t.get("close") or 0.0)
-            if last <= 0: time.sleep(3); continue
-            if last <= initial_stop:
-                log.warning("[TRAIL] initial SL hit (%.2f <= %.2f) -> SELL", last, initial_stop)
-                try:
-                    _, _, step = _get_min_trade_info(ex, symbol, last)
-                    q = _round_floor(qty, step) if step else qty
-                    q = _to_exchange_precision(ex, symbol, q)
-                    if not DRY_RUN: ex.create_market_sell_order(symbol, q)
-                except Exception as e:
-                    log.warning("[TRAIL] SELL initial failed: %s", e)
-                _with_state(lambda s: s.update({"has_position": False, "position_side": "none"}))
-                break
+
+            if last <= 0:
+                time.sleep(3)
+                continue
+
+            stop_to_use = initial_stop
+
             if not activated and last >= entry * (1.0 + activate_pct):
                 activated = True
+                max_price = max(max_price, last)
                 log.info("[TRAIL] activated at %.2f", last)
+
             if activated:
-                if last > max_price: max_price = last
-                trail_stop = max(initial_stop, max_price * (1.0 - gap))
-                if last <= trail_stop:
-                    log.info("[TRAIL] stop hit %.2f <= %.2f -> SELL", last, trail_stop)
+                max_price = max(max_price, last)
+                stop_to_use = max(
+                    initial_stop,
+                    max_price * (1.0 - gap),
+                )
+
+            if last <= stop_to_use:
+                sell_reason = "initial_sl" if not activated else "trailing_sl"
+
+                with _position_lock:
+                    # Re-vérification atomique juste avant tout ordre SELL.
+                    if not _position_is_current(position_id):
+                        log.info(
+                            "[TRAIL] position changée avant SELL position_id=%s -> annulation",
+                            position_id,
+                        )
+                        return
+
                     try:
                         _, _, step = _get_min_trade_info(ex, symbol, last)
                         q = _round_floor(qty, step) if step else qty
                         q = _to_exchange_precision(ex, symbol, q)
-                        if not DRY_RUN: ex.create_market_sell_order(symbol, q)
+
+                        if q <= 0:
+                            raise RuntimeError("Quantité SELL trailing invalide")
+
+                        if DRY_RUN:
+                            log.info(
+                                "[TRAIL] DRY_RUN SELL %s qty=%.8f last=%.2f stop=%.2f",
+                                sell_reason, q, last, stop_to_use,
+                            )
+                        else:
+                            ex.create_market_sell_order(symbol, q)
+
                     except Exception as e:
-                        log.warning("[TRAIL] SELL failed: %s", e)
-                    _with_state(lambda s: s.update({"has_position": False, "position_side": "none"}))
-                    break
+                        # Important : si Kraken refuse l'ordre, l'état reste ouvert.
+                        log.exception(
+                            "[TRAIL] SELL %s failed position_id=%s: %s",
+                            sell_reason, position_id, e,
+                        )
+                        time.sleep(3)
+                        continue
+
+                    # On efface l'état uniquement après succès du SELL
+                    # (ou simulation réussie en DRY_RUN).
+                    _clear_position_if_current(position_id)
+
+                log.info(
+                    "[TRAIL] position closed reason=%s position_id=%s",
+                    sell_reason, position_id,
+                )
+                break
+
             time.sleep(3)
+
         except Exception as e:
             log.warning("[TRAIL] error: %s", e)
             time.sleep(3)
-    log.info("[TRAIL] finished")
+
+    log.info("[TRAIL] finished position_id=%s", position_id)
 
 
 def _remember_alert(alert_id: str) -> bool:
@@ -484,6 +931,7 @@ def index():
 
 @app.get("/health")
 def health():
+    st = _get_state_snapshot()
     return jsonify({
         "status": "ok",
         "service": "orion",
@@ -494,7 +942,8 @@ def health():
         "secret_set": bool(WEBHOOK_SECRET),
         "dry_run": DRY_RUN,
         "shorting": ENABLE_SHORTING,
-        "has_position": bool(_state["has_position"]),
+        "has_position": bool(st["has_position"]),
+        "position_id": st.get("position_id"),
         "ts": int(time.time())
     }), 200
 
@@ -614,7 +1063,16 @@ def webhook():
 
             # ============= BUY (open long OR close short) =============
             if signal == "BUY":
-                st = dict(_state)
+                st = _get_state_snapshot()
+
+                # ORION v1 : une seule position LONG suivie à la fois.
+                if st.get("has_position") and st.get("position_side") == "long":
+                    return jsonify({
+                        "ok": False,
+                        "skipped": "already_long",
+                        "position_id": st.get("position_id"),
+                    }), 200
+
                 # Si short ouvert -> BUY ferme le short (quantité connue)
                 if st.get("position_side") == "short" and st.get("last_qty", 0) > 0:
                     qty_to_buy = st["last_qty"]
@@ -622,7 +1080,8 @@ def webhook():
                     if not DRY_RUN: order = ex.create_market_buy_order(symbol, qty_to_buy)
                     else: order = {"dry_run": True, "side":"buy", "qty": qty_to_buy}
                     _with_state(lambda s: s.update({
-                        "has_position": False, "position_side":"none", "last_qty":0.0
+                        "has_position": False, "position_side": "none",
+                        "position_id": None, "last_qty": 0.0,
                     }))
                     return jsonify({"ok": True, "side":"buy-close-short", "symbol": symbol,
                                     "amount": qty_to_buy, "order": order, "confidence": conf,
@@ -669,21 +1128,54 @@ def webhook():
                     orders.append(order)
                     if chunks > 1 and BUY_SPLIT_DELAY_MS > 0:
                         time.sleep(BUY_SPLIT_DELAY_MS/1000.0)
+
                 vwap = (vw_cost / total_qty) if total_qty > 0 else last_price
+                position_id = uuid.uuid4().hex
+
+                # Stop réel : priorité au stop_price absolu envoyé par Pine.
+                # ORION ne le resserre plus silencieusement avec RISK_PCT.
+                initial_stop, effective_sl_pct, stop_source = _resolve_initial_stop(
+                    vwap,
+                    payload.get("stop_price"),
+                    sl_pct,
+                )
+
+                log.info(
+                    "[RISK] stop_source=%s entry=%.2f initial_stop=%.2f sl_pct=%.5f",
+                    stop_source, vwap, initial_stop, effective_sl_pct,
+                )
 
                 _with_state(lambda s: s.update({
-                    "has_position": True, "position_side":"long",
-                    "last_buy_ts": _now(), "last_entry_price": vwap,
-                    "last_qty": total_qty, "symbol": symbol
+                    "has_position": True,
+                    "position_side": "long",
+                    "position_id": position_id,
+                    "last_buy_ts": _now(),
+                    "last_entry_price": vwap,
+                    "last_qty": total_qty,
+                    "symbol": symbol,
                 }))
 
                 if TRAILING_ENABLED and total_qty > 0:
-                    threading.Thread(target=_monitor_trailing,
-                                     args=(symbol, total_qty, vwap, conf, min(sl_pct, RISK_PCT)),
-                                     daemon=True).start()
-                return jsonify({"ok": True, "side":"buy-open-long", "symbol": symbol,
-                                "amount": total_qty, "avg_price": vwap,
-                                "orders": orders, "confidence": conf, "reason": reason}), 200
+                    threading.Thread(
+                        target=_monitor_trailing,
+                        args=(symbol, total_qty, vwap, conf, initial_stop, position_id),
+                        daemon=True,
+                    ).start()
+
+                return jsonify({
+                    "ok": True,
+                    "side": "buy-open-long",
+                    "symbol": symbol,
+                    "amount": total_qty,
+                    "avg_price": vwap,
+                    "orders": orders,
+                    "confidence": conf,
+                    "reason": reason,
+                    "position_id": position_id,
+                    "initial_stop": initial_stop,
+                    "sl_pct_used": effective_sl_pct,
+                    "stop_source": stop_source,
+                }), 200
 
             # ============= SELL (close long OR open short) =============
             if signal == "SELL":
@@ -705,13 +1197,12 @@ def webhook():
                             "qty": qty_to_sell,
                         }
 
-                        _with_state(
-                            lambda s: s.update({
-                                "has_position": False,
-                                "position_side": "none",
-                                "last_qty": 0.0,
-                            })
-                        )
+                        _with_state(lambda s: s.update({
+                            "has_position": False,
+                            "position_side": "none",
+                            "position_id": None,
+                            "last_qty": 0.0,
+                        }))
 
                         return jsonify({
                             "ok": True,
@@ -722,26 +1213,59 @@ def webhook():
                             "reason": reason,
                         }), 200
 
-                balances = ex.fetch_free_balance()
-                base = symbol.split("/")[0]
-                base_free = float(balances.get(base, 0.0))
-
-                # 1) S'il y a du BTC libre -> on ferme le long
-                if base_free > 0:
+                # 1) Fermer uniquement la quantité de la position LONG suivie par ORION.
+                st = _get_state_snapshot()
+                if (
+                    st.get("has_position")
+                    and st.get("position_side") == "long"
+                    and float(st.get("last_qty", 0.0)) > 0
+                ):
                     ticker = ex.fetch_ticker(symbol)
-                    price  = float(ticker.get("last") or ticker.get("close") or 0.0) or 1.0
+                    price = float(ticker.get("last") or ticker.get("close") or 0.0) or 1.0
                     min_amount, _, step = _get_min_trade_info(ex, symbol, price)
-                    qty_to_sell = max(0.0, base_free - BASE_RESERVE)
-                    if step: qty_to_sell = _round_floor(qty_to_sell, step)
+
+                    qty_to_sell = float(st["last_qty"])
+                    if step:
+                        qty_to_sell = _round_floor(qty_to_sell, step)
                     qty_to_sell = _to_exchange_precision(ex, symbol, qty_to_sell)
+
                     if qty_to_sell < max(min_amount, 0.0):
-                        return jsonify({"ok": False, "skipped":"insufficient-base",
-                                        "base_free": base_free, "min_amount": min_amount}), 200
-                    if DRY_RUN: order = {"dry_run":True, "side":"sell", "symbol":symbol, "qty":qty_to_sell}
-                    else: order = ex.create_market_sell_order(symbol, qty_to_sell)
-                    _with_state(lambda s: s.update({"has_position": False, "position_side":"none", "last_qty":0.0}))
-                    return jsonify({"ok": True, "side":"sell-close-long", "symbol": symbol,
-                                    "amount": qty_to_sell, "order": order, "reason": reason}), 200
+                        return jsonify({
+                            "ok": False,
+                            "skipped": "tracked_qty_below_minimum",
+                            "tracked_qty": st.get("last_qty"),
+                            "min_amount": min_amount,
+                        }), 200
+
+                    try:
+                        if DRY_RUN:
+                            order = {
+                                "dry_run": True,
+                                "side": "sell",
+                                "symbol": symbol,
+                                "qty": qty_to_sell,
+                            }
+                        else:
+                            order = ex.create_market_sell_order(symbol, qty_to_sell)
+                    except Exception as e:
+                        log.exception("SELL close long failed: %s", e)
+                        return jsonify({
+                            "ok": False,
+                            "error": "sell_failed",
+                            "detail": str(e),
+                            "position_id": st.get("position_id"),
+                        }), 502
+
+                    _clear_position_if_current(st.get("position_id"))
+
+                    return jsonify({
+                        "ok": True,
+                        "side": "sell-close-long",
+                        "symbol": symbol,
+                        "amount": qty_to_sell,
+                        "order": order,
+                        "reason": reason,
+                    }), 200
 
                 # 2) Sinon pas de BTC : ouvrir un short si autorisé
                 if not ENABLE_SHORTING:
@@ -754,8 +1278,8 @@ def webhook():
 
                 # quantité à vendre (base) calibrée sur le "quote" et le levier
                 base_qty, price = _compute_base_qty_for_quote(ex, symbol, requested_quote)
-                # avec levier N, Kraken gère la marge; nous vendons "base_qty * leverage" ?
-                # Par sécurité, on vend "base_qty" et on passe 'leverage' à l'API.
+                # avec levier N, Kraken gère la marge; nous vendons "base_qty" et
+                # on passe 'leverage' à l'API.
                 _, _, step = _get_min_trade_info(ex, symbol, price)
                 if step: base_qty = _round_floor(base_qty, step)
                 base_qty = _to_exchange_precision(ex, symbol, base_qty)
@@ -767,13 +1291,18 @@ def webhook():
                     # create_order: type, side, amount, price=None, params={}
                     order = ex.create_order(symbol, "market", "sell", base_qty, None, params)
 
+                short_position_id = uuid.uuid4().hex
                 _with_state(lambda s: s.update({
-                    "has_position": True, "position_side":"short",
-                    "last_entry_price": price, "last_qty": base_qty, "symbol": symbol
+                    "has_position": True,
+                    "position_side": "short",
+                    "position_id": short_position_id,
+                    "last_entry_price": price,
+                    "last_qty": base_qty,
+                    "symbol": symbol,
                 }))
                 return jsonify({"ok": True, "side":"sell-open-short", "symbol": symbol,
                                 "amount": base_qty, "order": order, "leverage": MARGIN_LEVERAGE,
-                                "reason": reason}), 200
+                                "reason": reason, "position_id": short_position_id}), 200
 
             return jsonify({"error": f"unknown-signal:{signal}"}), 400
 
@@ -787,4 +1316,3 @@ _load_state()
 if __name__ == "__main__":
     port = int(os.getenv("PORT","10000"))
     app.run(host="0.0.0.0", port=port)
-
