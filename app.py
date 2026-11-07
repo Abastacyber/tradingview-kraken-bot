@@ -46,6 +46,8 @@ MAX_SL_PCT             = env_float("MAX_SL_PCT", 0.05)
 BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 
 DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1","true","yes")
+# Plafond du capital virtuel par trade en DRY_RUN (le solde Kraken réel n'est pas consulté).
+DRY_RUN_MAX_QUOTE      = max(0.0, env_float("DRY_RUN_MAX_QUOTE", 100.0))
 WEBHOOK_SECRET         = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))
 
 TRAILING_ENABLED          = env_str("TRAILING_ENABLED","true").lower() in ("1","true","yes")
@@ -797,13 +799,26 @@ def webhook():
                     return jsonify({"error":"sizing_error",
                                     "detail": f"Montant trop faible: min {MIN_QUOTE_PER_TRADE} {QUOTE_SYMBOL}"}), 400
 
-                balances = ex.fetch_free_balance()
-                avail_quote = float(balances.get(QUOTE_SYMBOL, 0.0))
-                usable_quote = max(0.0, avail_quote - QUOTE_RESERVE)
-                quote_to_use = min(requested_quote, usable_quote)
+                if DRY_RUN:
+                    # Sizing simulé : indépendant du solde EUR réel du compte Kraken.
+                    avail_quote = None
+                    quote_to_use = min(requested_quote, DRY_RUN_MAX_QUOTE)
+                    sizing_source = "dry_run_virtual"
+                else:
+                    balances = ex.fetch_free_balance()
+                    avail_quote = float(balances.get(QUOTE_SYMBOL, 0.0))
+                    usable_quote = max(0.0, avail_quote - QUOTE_RESERVE)
+                    quote_to_use = min(requested_quote, usable_quote)
+                    sizing_source = "kraken_balance"
                 if quote_to_use <= 0:
                     return jsonify({"error":"insufficient_quote","available":avail_quote,
-                                    "quote_reserve": QUOTE_RESERVE}), 400
+                                    "quote_reserve": QUOTE_RESERVE,
+                                    "sizing_source": sizing_source}), 400
+
+                log.info(
+                    "[SIZING] source=%s requested=%.2f used=%.2f %s",
+                    sizing_source, requested_quote, quote_to_use, QUOTE_SYMBOL,
+                )
 
                 chunks = max(1, min(BUY_SPLIT_CHUNKS, 10))
                 per_chunk_quote = quote_to_use / chunks
@@ -873,6 +888,9 @@ def webhook():
                     "initial_stop": initial_stop,
                     "sl_pct_used": effective_sl_pct,
                     "stop_source": stop_source,
+                    "requested_quote": requested_quote,
+                    "quote_used": quote_to_use,
+                    "sizing_source": sizing_source,
                 }), 200
 
             # ============= SELL (close long OR open short) =============
