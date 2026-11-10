@@ -39,7 +39,7 @@ services:
       - key: BUY_COOL_SEC
         value: "180"
       - key: DRY_RUN
-        value: "false"
+        value: "true"   # ORION : LIVE verrouillé. Ne passer à "false" que sur décision GO explicite.
       - key: RESTORE_ON_START
         value: "true"
       - key: LOG_LEVEL
