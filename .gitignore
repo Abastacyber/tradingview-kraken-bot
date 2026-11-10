@@ -7,3 +7,7 @@ venv/
 .env
 .env.*
 .DS_Store
+
+# ORION lab : données téléchargées et résultats bruts
+lab/data/
+lab/results/*.csv
