@@ -1,4 +1,4 @@
-# ORION — test DRY_RUN du correctif sizing (étapes 3 à 7 de la mémoire du 22/08)
+﻿# ORION — test DRY_RUN du correctif sizing (étapes 3 à 7 de la mémoire du 22/08)
 # Le secret est saisi masqué, jamais écrit dans la commande.
 $base = "https://tv-krkn-bot-v2.onrender.com"
 $sec = Read-Host -Prompt "WEBHOOK_SECRET" -AsSecureString

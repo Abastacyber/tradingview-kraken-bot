@@ -36,7 +36,7 @@ Deux circuits distincts :
 |---|---|
 | Service Render `tv-krkn-bot-v2` | en ligne, DRY_RUN=true |
 | Branche de travail GitHub | `feature/orion-protocol-v1` |
-| Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé et poussé le 09/11 — **test réel à faire** |
+| Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
 | Tests automatiques | 8 tests, tous PASS |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
@@ -49,7 +49,10 @@ Deux circuits distincts :
 | Réglages trailing sur Render | activation 0,3 % / écart 0,04 % (CONF2) : encore plus serrés que le code ; perdants selon EXP01 |
 | `RESTORE_ON_START` sur Render | false (l'état n'est pas relu au redémarrage) |
 | `render.yaml` du dépôt | ne reflète PAS les réglages réels de Render (fichier non utilisé) |
-| Secrets (clés Kraken + WEBHOOK_SECRET) | **exposés le 11/11 (fichier .env partagé dans la conversation) → à renouveler** |
+| Secrets (clés Kraken + WEBHOOK_SECRET) | exposés le 11/11 → **renouvelés le 11/11** (nouvelle clé « API NEXT GEN » sans droit de retrait, ancienne supprimée ; /health OK) |
+| Droit Kraken « Requête » (lire le solde) | non coché sur la nouvelle clé — inutile en DRY_RUN, **nécessaire avant LIVE** |
+| Alertes TradingView | mot de passe à mettre à jour s'il y a des alertes actives (non confirmé) |
+| Ping `/health` chaque minute (Google Apps Script) | ancien maintien en éveil du plan gratuit ; inutile en Starter mais sans danger |
 
 ## 3. Ce que les données nous ont appris (résumé — détail dans LAB_JOURNAL)
 
@@ -63,8 +66,7 @@ Deux circuits distincts :
 
 ## 4. Prochaine action
 
-1. **Propriétaire :** tester le correctif sizing en DRY_RUN (`tools/orion_test_dry_run.ps1`) et regarder
-   ses frais réels sur Kraken Pro (palier de frais du compte).
+1. **Propriétaire :** regarder ses frais réels sur Kraken Pro (palier de frais du compte) ; cocher « Requête » sur la clé API.
 2. **Claude :** EXP02 = robustesse des stratégies de tendance 4 h / 1 jour (réglages voisins,
    année par année, tirages aléatoires) + taille de position selon la volatilité.
 3. **Décision à prendre ensemble ensuite :** faire évoluer ORION du 15 min vers un signal 4 h / 1 jour ?
@@ -81,6 +83,7 @@ Deux circuits distincts :
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **11/11/2026 (3)** — Secrets renouvelés (clé Kraken + WEBHOOK_SECRET). Test DRY_RUN réel du correctif sizing : PASS.
 - **11/11/2026 (2)** — Réglages réels Render analysés : plan Starter (pas de veille), déploiement auto confirmé, TRAILING_ENABLED=false, trailing très serré, RESTORE_ON_START=false. Secrets exposés → renouvellement demandé.
 - **10/11/2026** — Laboratoire de backtest créé (données BTC/EUR 2020-2026, moteur avec frais/glissement,
   4 tests). EXP01 : le 15 min est perdant net de frais, la tendance 4 h / 1 j est positive.
