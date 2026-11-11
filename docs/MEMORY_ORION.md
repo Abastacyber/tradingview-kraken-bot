@@ -43,7 +43,13 @@ Deux circuits distincts :
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
 | Anti-doublon persistant | à faire |
 | `MAX_PRICE_DEVIATION_PCT` | variable présente, non branchée |
-| Render plan gratuit : mise en veille après inactivité | à vérifier — peut arrêter la surveillance du stop (bloquant avant LIVE) |
+| Plan Render | **Starter** (7 $/mois, 0,5 CPU, 512 Mo) : pas de mise en veille — point résolu le 11/11 |
+| Déploiement Render | automatique depuis `feature/orion-protocol-v1` (commit 11ff64e en ligne le 11/11 → correctif sizing déployé) |
+| `TRAILING_ENABLED` sur Render | **false** → aucun stop surveillé par ORION (ni stop Pine, ni trailing). Acceptable en DRY_RUN, **bloquant avant LIVE** |
+| Réglages trailing sur Render | activation 0,3 % / écart 0,04 % (CONF2) : encore plus serrés que le code ; perdants selon EXP01 |
+| `RESTORE_ON_START` sur Render | false (l'état n'est pas relu au redémarrage) |
+| `render.yaml` du dépôt | ne reflète PAS les réglages réels de Render (fichier non utilisé) |
+| Secrets (clés Kraken + WEBHOOK_SECRET) | **exposés le 11/11 (fichier .env partagé dans la conversation) → à renouveler** |
 
 ## 3. Ce que les données nous ont appris (résumé — détail dans LAB_JOURNAL)
 
@@ -75,6 +81,7 @@ Deux circuits distincts :
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **11/11/2026 (2)** — Réglages réels Render analysés : plan Starter (pas de veille), déploiement auto confirmé, TRAILING_ENABLED=false, trailing très serré, RESTORE_ON_START=false. Secrets exposés → renouvellement demandé.
 - **10/11/2026** — Laboratoire de backtest créé (données BTC/EUR 2020-2026, moteur avec frais/glissement,
   4 tests). EXP01 : le 15 min est perdant net de frais, la tendance 4 h / 1 j est positive.
   `render.yaml` sécurisé (DRY_RUN=true). Découverte : frais Kraken possiblement doublés (à confirmer).
