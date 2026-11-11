@@ -64,16 +64,19 @@ Deux circuits distincts :
 - **EXP02 (11/11) : le seul candidat robuste est le suivi de tendance EMA en JOURNALIER** — 100 % des réglages
   voisins positifs (97 % avec frais doublés), 0 % en 2022 quand le BTC fait -63 %. Le 4 h est fragile et sensible aux frais.
   Limite : ≈ 18 trades en 7 ans.
+- **EXP03 (11/11) : règle candidate « ORION GARDIEN v1 »** — acheteur tant que EMA20>EMA50 et prix>EMA200 (journalier),
+  vente quand EMA20<EMA50, stop de protection chez Kraken. Confirmée sur ETH/EUR (+40 % quand ETH fait -5 %).
+  Au 10/11/2026 : conditions NON réunies (le gardien serait en euros).
 - **Frais Kraken possiblement doublés en juillet 2026** (taker 0,80 % selon plusieurs sites, non confirmé
   par Kraken). À vérifier sur le compte : c'est un paramètre décisif.
 
 ## 4. Prochaine action
 
 1. **Propriétaire :** regarder ses frais réels sur Kraken Pro (palier de frais du compte) ; cocher « Requête » sur la clé API.
-2. **Claude :** EXP03 = taille de position selon le risque + confirmation sur ETH/EUR + combinaison
-   tendance journalière (feu vert) / entrée plus fine en 4 h.
-3. **Décision à prendre ensemble ensuite :** faire évoluer ORION du 15 min vers un signal de tendance journalier (EXP02) ?
-   (le validateur ORION n'accepte aujourd'hui que `timeframe = "15"`).
+2. **Claude :** transformer ORION en « gardien journalier » (voie A décidée le 11/11), par petites étapes testées :
+   calcul du signal journalier, enveloppe ORION_CAPITAL, état durable + réconciliation Kraken, stop posé chez Kraken.
+   Puis DRY_RUN, puis micro-LIVE (montant à décider par le propriétaire, proposition : 100 €).
+3. **Décision à prendre :** qui calcule le signal journalier — ORION lui-même (données Kraken, recommandé) ou TradingView ?
 
 ## 5. Règles permanentes
 
@@ -86,6 +89,7 @@ Deux circuits distincts :
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **11/11/2026 (5)** — Voie A décidée (gardien journalier). EXP03 : entrée « état » robuste sur BTC et ETH. Signal actuel : en euros.
 - **11/11/2026 (4)** — EXP02 robustesse : tendance EMA journalière robuste, 4 h fragile (voir LAB_JOURNAL).
 - **11/11/2026 (3)** — Secrets renouvelés (clé Kraken + WEBHOOK_SECRET). Test DRY_RUN réel du correctif sizing : PASS.
 - **11/11/2026 (2)** — Réglages réels Render analysés : plan Starter (pas de veille), déploiement auto confirmé, TRAILING_ENABLED=false, trailing très serré, RESTORE_ON_START=false. Secrets exposés → renouvellement demandé.

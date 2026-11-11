@@ -47,3 +47,15 @@ def rsi2_pullback(df, rsi_n=2, buy_below=10, trend=200, exit_ema=5):
     up = (r < buy_below) & (df.close > ema(df.close, trend))
     dn = df.close > ema(df.close, exit_ema)
     return up, dn
+
+
+def ema_state(df, fast=20, slow=50, trend=200):
+    """Variante « état » : on est acheteur TANT QUE la moyenne rapide est au-dessus de la lente
+    et le prix au-dessus de l'EMA de tendance (pas seulement au moment du croisement).
+    Utile pour démarrer le bot en cours de tendance."""
+    f, s = ema(df.close, fast), ema(df.close, slow)
+    up = (f > s)
+    if trend:
+        up &= df.close > ema(df.close, trend)
+    dn = f < s
+    return up, dn

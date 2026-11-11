@@ -92,3 +92,39 @@ Trois tests : réglages voisins (49 réglages par horizon, chacun avec 2 niveaux
 - Taille de position selon le risque (risquer 1 % du capital par trade au lieu d'investir 100 %).
 - Combiner : tendance journalière comme « feu vert », et le 4 h / 15 min uniquement pour mieux entrer.
 - Même test sur ETH/EUR pour vérifier que ce n'est pas propre au BTC.
+
+---
+
+## EXP03 — 11/11/2026 — Préparer le gardien de tendance journalier (voie A choisie)
+
+Rapport complet : `lab/results/EXP03_gardien_journalier.md` · Script : `lab/exp03_gardien_journalier.py`
+
+**Décision du propriétaire (11/11) :** voie A — ORION devient un gardien de tendance journalier.
+
+### Ce que disent les données
+
+1. **Entrée « état » > entrée « croisement ».** « État » = être acheteur tant que EMA rapide > EMA lente
+   ET prix > EMA200 (et pas seulement le jour du croisement).
+   - BTC/EUR, sortie sur signal seul : 100 % des 16 réglages gagnants sur les 2 périodes, même à 0,80 % de frais.
+     Contrôle 2024-2026 médian **+68 %** (acheter et garder +77 %), perte max médiane **-34 %** (B&H -52 %).
+   - **ETH/EUR (confirmation sur un autre marché) :** « état » 100 % de réglages gagnants, médian **+40 %**
+     alors qu'acheter et garder fait **-5 %** sur la même période. L'entrée « croisement » échoue sur ETH
+     (3 trades seulement, ratés). → **la règle « état » se généralise, la règle « croisement » non.**
+2. **Sorties :** avec l'entrée « état », le trailing 4 ATR est **nuisible** (allers-retours, frais). La sortie
+   sur signal (EMA rapide repasse sous la lente) est la meilleure. Un stop de protection à 3 ATR coûte un peu
+   (BTC +62 % au lieu de +68 %) mais protège contre un krach brutal ou une panne du serveur.
+3. **Signal au 10/11/2026 :** BTC 66 005 € sous EMA20 (69 449), EMA50 (70 249) et EMA200 (66 909)
+   → conditions d'achat **non réunies** : le gardien serait en euros. ETH : idem.
+
+### Règle candidate « ORION GARDIEN v1 » (à implémenter, puis valider en DRY_RUN)
+
+- Données : bougies journalières Kraken BTC/EUR, décision une fois par jour après la clôture (00:00 UTC).
+- Achat si EMA20 > EMA50 et clôture > EMA200 (réglage central d'un plateau de 16 réglages tous gagnants).
+- Vente si EMA20 < EMA50.
+- Stop de protection posé directement chez Kraken (≈ 3 ATR) : une assurance, pas un outil de sortie.
+- Capital : uniquement l'enveloppe ORION définie (jamais tout le solde Kraken).
+
+### Limites
+
+- Peu de trades (6 à 10 sur la période de contrôle). Robustesse = plateau de réglages + 2 marchés.
+- Le passé ne garantit pas l'avenir : prévoir une perte maximale possible **d'au moins -50 %** de l'enveloppe.
