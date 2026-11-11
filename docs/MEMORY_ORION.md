@@ -1,6 +1,6 @@
 # ORION — MÉMOIRE VIVANTE
 
-**Dernière mise à jour : 10/11/2026**
+**Dernière mise à jour : 11/11/2026**
 **Statut : DRY_RUN uniquement — LIVE verrouillé**
 
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
@@ -17,6 +17,19 @@ Pas de copy trading : on s'inspire de ce qui a fait ses preuves, on construit le
 Philosophie : TradingView analyse → ORION décide → Kraken exécute → tout est documenté.
 Priorités : capital avant profit · net avant brut · qualité sans sur-filtrage · mesurer avant de modifier.
 
+## 2bis. Qui fait quoi (en simple)
+
+Deux circuits distincts :
+- **Circuit du trade (temps réel) :** TradingView (Pine Script repère le setup) → message webhook
+  (protocole orion-v1 + mot de passe) → Render (app.py = ORION contrôle, décide, dimensionne)
+  → Kraken (exécute, détient l'argent).
+- **Circuit de fabrication (quand on change le code) :** Claude → GitHub (version officielle du code
+  + historique) → Render recharge automatiquement la nouvelle version.
+- GitHub n'est **jamais** sur le chemin d'un trade. Le laboratoire (`lab/`) est hors circuit.
+- Qui touche quoi : Pine/TradingView = le propriétaire (copier-coller fourni par Claude) ;
+  GitHub = Claude ; réglages Render (DRY_RUN, clés) = le propriétaire, rarement, après discussion ;
+  Kraken (argent, clés API, frais) = le propriétaire.
+
 ## 2. Où on en est
 
 | Élément | État |
@@ -30,6 +43,7 @@ Priorités : capital avant profit · net avant brut · qualité sans sur-filtrag
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
 | Anti-doublon persistant | à faire |
 | `MAX_PRICE_DEVIATION_PCT` | variable présente, non branchée |
+| Render plan gratuit : mise en veille après inactivité | à vérifier — peut arrêter la surveillance du stop (bloquant avant LIVE) |
 
 ## 3. Ce que les données nous ont appris (résumé — détail dans LAB_JOURNAL)
 
@@ -60,6 +74,7 @@ Priorités : capital avant profit · net avant brut · qualité sans sur-filtrag
 
 ## 6. Journal des mises à jour
 
+- **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
 - **10/11/2026** — Laboratoire de backtest créé (données BTC/EUR 2020-2026, moteur avec frais/glissement,
   4 tests). EXP01 : le 15 min est perdant net de frais, la tendance 4 h / 1 j est positive.
   `render.yaml` sécurisé (DRY_RUN=true). Découverte : frais Kraken possiblement doublés (à confirmer).
