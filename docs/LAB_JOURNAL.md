@@ -60,7 +60,7 @@ Rapport complet : `lab/results/EXP01_frais_horizon.md` · Script : `lab/exp01_fr
 Rapport complet : `lab/results/EXP02_robustesse.md` · Script : `lab/exp02_robustesse.py`
 
 **Question :** les bons résultats d'EXP01 en 4 h / 1 jour sont-ils solides ou dus à la chance ?
-Trois tests : réglages voisins (98 réglages par horizon), année par année, 10 000 tirages aléatoires.
+Trois tests : réglages voisins (49 réglages par horizon, chacun avec 2 niveaux de frais), année par année, 10 000 tirages aléatoires.
 
 ### Ce que disent les données
 
