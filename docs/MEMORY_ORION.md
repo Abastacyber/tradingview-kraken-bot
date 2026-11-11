@@ -61,15 +61,18 @@ Deux circuits distincts :
 - **Les sorties ORION actuelles** (trailing +0,4 % / 0,2 %) perdent ≈ 0,9 % par trade → à revoir.
 - **Tendance en 4 h et 1 jour : rentable net** sur la période de contrôle 2024-2026,
   avec une perte maximale 2 à 2,5 fois plus faible que l'achat-conservation. Échantillon encore petit.
+- **EXP02 (11/11) : le seul candidat robuste est le suivi de tendance EMA en JOURNALIER** — 100 % des réglages
+  voisins positifs (97 % avec frais doublés), 0 % en 2022 quand le BTC fait -63 %. Le 4 h est fragile et sensible aux frais.
+  Limite : ≈ 18 trades en 7 ans.
 - **Frais Kraken possiblement doublés en juillet 2026** (taker 0,80 % selon plusieurs sites, non confirmé
   par Kraken). À vérifier sur le compte : c'est un paramètre décisif.
 
 ## 4. Prochaine action
 
 1. **Propriétaire :** regarder ses frais réels sur Kraken Pro (palier de frais du compte) ; cocher « Requête » sur la clé API.
-2. **Claude :** EXP02 = robustesse des stratégies de tendance 4 h / 1 jour (réglages voisins,
-   année par année, tirages aléatoires) + taille de position selon la volatilité.
-3. **Décision à prendre ensemble ensuite :** faire évoluer ORION du 15 min vers un signal 4 h / 1 jour ?
+2. **Claude :** EXP03 = taille de position selon le risque + confirmation sur ETH/EUR + combinaison
+   tendance journalière (feu vert) / entrée plus fine en 4 h.
+3. **Décision à prendre ensemble ensuite :** faire évoluer ORION du 15 min vers un signal de tendance journalier (EXP02) ?
    (le validateur ORION n'accepte aujourd'hui que `timeframe = "15"`).
 
 ## 5. Règles permanentes
@@ -83,6 +86,7 @@ Deux circuits distincts :
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **11/11/2026 (4)** — EXP02 robustesse : tendance EMA journalière robuste, 4 h fragile (voir LAB_JOURNAL).
 - **11/11/2026 (3)** — Secrets renouvelés (clé Kraken + WEBHOOK_SECRET). Test DRY_RUN réel du correctif sizing : PASS.
 - **11/11/2026 (2)** — Réglages réels Render analysés : plan Starter (pas de veille), déploiement auto confirmé, TRAILING_ENABLED=false, trailing très serré, RESTORE_ON_START=false. Secrets exposés → renouvellement demandé.
 - **10/11/2026** — Laboratoire de backtest créé (données BTC/EUR 2020-2026, moteur avec frais/glissement,

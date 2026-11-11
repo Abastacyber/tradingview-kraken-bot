@@ -52,3 +52,43 @@ Rapport complet : `lab/results/EXP01_frais_horizon.md` · Script : `lab/exp01_fr
 - Frais réels du compte Kraken aujourd'hui (voir le compte, ou un relevé de trade récent).
 - Peut-on garder un signal 4 h / 1 jour et utiliser le 15 min uniquement pour mieux placer l'entrée ?
 - Taille de position selon la volatilité (risquer un montant fixe, pas investir un montant fixe).
+
+---
+
+## EXP02 — 11/11/2026 — Robustesse du suivi de tendance (4 h et journalier)
+
+Rapport complet : `lab/results/EXP02_robustesse.md` · Script : `lab/exp02_robustesse.py`
+
+**Question :** les bons résultats d'EXP01 en 4 h / 1 jour sont-ils solides ou dus à la chance ?
+Trois tests : réglages voisins (98 réglages par horizon), année par année, 10 000 tirages aléatoires.
+
+### Ce que disent les données
+
+1. **Un seul candidat solide : le croisement de moyennes EMA en JOURNALIER.**
+   Sur 32 réglages voisins, 100 % sont positifs en étude ET en contrôle (frais 0,40 %),
+   97 % encore avec des frais doublés à 0,80 %. Résultat médian en contrôle 2024-2026 : +33 %
+   (+25 % à 0,80 %), profit factor médian 2,4. C'est un « plateau », pas un pic de chance.
+2. **Le 4 h est fragile.** EMA : 56 % des réglages positifs sur les deux périodes, Donchian 41 %.
+   Avec des frais à 0,80 %, quasiment tout devient perdant. → Le 4 h dépend trop des frais.
+3. **La cassure Donchian en journalier est moyenne** : 59 % de réglages positifs en contrôle.
+4. **Année par année (EMA 20/50 + EMA200, journalier, frais 0,40 %) vs acheter et garder :**
+   2020 +211 % (B&H +261 %) · 2021 +41 % (+69 %) · **2022 0 % (B&H -63 %)** · 2023 +25 % (+148 %) ·
+   2024 +33 % (+125 %) · **2025 -4 % (B&H -18 %)** · **2026 +12 % (B&H -9 %)**.
+   → Elle gagne moins dans les fortes hausses, mais **évite l'essentiel des chutes**. C'est son rôle.
+5. **Tirages aléatoires sur 2 ans** (journalier EMA) : 14 % de risque de perdre, résultat médian +54 %,
+   perte maximale médiane -8 %, mauvais cas -18 %. 4 h : 25-31 % de risque de perdre, pertes max -21 à -47 %.
+
+### Leçons
+
+- Le cœur le plus prometteur pour ORION est un **suivi de tendance en journalier** : peu de trades
+  (≈ 3 par an), donc les frais pèsent peu, même s'ils ont doublé.
+- **Limite importante :** ≈ 18 trades sur 7 ans. La robustesse vient du plateau de réglages, pas du nombre
+  de trades. Il faudra confirmer sur d'autres marchés (ETH, autres périodes) avant d'y engager de l'argent.
+- Un bot à 3 trades par an ne « fait » pas grand-chose : son intérêt est de **protéger le capital dans les
+  marchés baissiers** tout en captant une bonne partie des hausses.
+
+### Prochaines questions (EXP03)
+
+- Taille de position selon le risque (risquer 1 % du capital par trade au lieu d'investir 100 %).
+- Combiner : tendance journalière comme « feu vert », et le 4 h / 15 min uniquement pour mieux entrer.
+- Même test sur ETH/EUR pour vérifier que ce n'est pas propre au BTC.
