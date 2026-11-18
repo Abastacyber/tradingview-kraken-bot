@@ -1,6 +1,6 @@
 # ORION — MÉMOIRE VIVANTE
 
-**Dernière mise à jour : 11/11/2026**
+**Dernière mise à jour : 18/11/2026**
 **Statut : DRY_RUN uniquement — LIVE verrouillé**
 
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
@@ -67,8 +67,9 @@ Deux circuits distincts :
 - **EXP03 (11/11) : règle candidate « ORION GARDIEN v1 »** — acheteur tant que EMA20>EMA50 et prix>EMA200 (journalier),
   vente quand EMA20<EMA50, stop de protection chez Kraken. Confirmée sur ETH/EUR (+40 % quand ETH fait -5 %).
   Au 10/11/2026 : conditions NON réunies (le gardien serait en euros).
-- **Frais Kraken possiblement doublés en juillet 2026** (taker 0,80 % selon plusieurs sites, non confirmé
-  par Kraken). À vérifier sur le compte : c'est un paramètre décisif.
+- **Frais Kraken : hausse du 9 juillet 2026 quasi confirmée** (veille du 15/11, pages d'aide Kraken via moteur de recherche) :
+  palier de départ **0,40 % maker / 0,80 % taker**. Hypothèse de travail désormais : 0,80 % par ordre market.
+  La règle gardien journalier reste gagnante à 0,80 % (EXP02/EXP03). À confirmer sur le compte du propriétaire.
 
 ## 4. Prochaine action
 
@@ -77,6 +78,13 @@ Deux circuits distincts :
    calcul du signal journalier, enveloppe ORION_CAPITAL, état durable + réconciliation Kraken, stop posé chez Kraken.
    Puis DRY_RUN, puis micro-LIVE (montant à décider par le propriétaire, proposition : 100 €).
 3. **Décision à prendre :** qui calcule le signal journalier — ORION lui-même (données Kraken, recommandé) ou TradingView ?
+
+## 4bis. Reprendre dans une nouvelle conversation
+
+Toute la mémoire est dans GitHub (ce fichier, `docs/LAB_JOURNAL.md`, `docs/veille/`, `CLAUDE.md`).
+Pour reprendre : claude.ai/code → nouvelle session → dépôt `Abastacyber/tradingview-kraken-bot`,
+branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → écrire :
+« Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point. »
 
 ## 5. Règles permanentes
 
@@ -89,6 +97,10 @@ Deux circuits distincts :
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **18/11/2026** — Veille du 15/11 récupérée (`docs/veille/VEILLE_2026-11-15.md`) : BTC -12 % en 4 jours (58 293 € le 14/11),
+  régime baissier, gardien en euros (aurait évité la chute) ; frais 0,40/0,80 % quasi confirmés. La veille automatique
+  ne peut pas écrire sur GitHub → corrigée : elle rend son rapport dans sa session, récupéré à chaque séance (CLAUDE.md).
+  Procédure « nouvelle conversation » ajoutée (section 4bis). Clôture du 17/11 : 59 026 €, toujours en euros.
 - **11/11/2026 (5)** — Voie A décidée (gardien journalier). EXP03 : entrée « état » robuste sur BTC et ETH. Signal actuel : en euros.
 - **11/11/2026 (4)** — EXP02 robustesse : tendance EMA journalière robuste, 4 h fragile (voir LAB_JOURNAL).
 - **11/11/2026 (3)** — Secrets renouvelés (clé Kraken + WEBHOOK_SECRET). Test DRY_RUN réel du correctif sizing : PASS.

@@ -11,8 +11,11 @@
 ## Au début de chaque séance
 1. Lire `docs/MEMORY_ORION.md` (état actuel + prochaine action).
 2. Lire la dernière entrée de `docs/LAB_JOURNAL.md` et le dernier fichier de `docs/veille/`.
-3. Récupérer la branche `orion-veille` si elle contient des rapports non encore intégrés
-   (`git fetch origin orion-veille`) et les intégrer dans la mémoire.
+3. Récupérer la ou les veilles hebdomadaires non encore enregistrées. La veille automatique
+   (tâche programmée « Veille ORION hebdomadaire », id `trig_01XpYiBBrRqTeStQxWpSLrLb`, dimanche 19h36 Paris)
+   n'a PAS le droit d'écrire sur GitHub : son rapport complet est le dernier message de sa session.
+   → `get_trigger` (outils claude-code-remote) → `last_run.session_id` → `list_events` (kinds assistant)
+   → enregistrer le rapport dans `docs/veille/VEILLE_AAAA-MM-JJ.md` et ajouter une ligne datée dans la mémoire.
 
 ## À la fin de chaque séance
 - Mettre à jour `docs/MEMORY_ORION.md` : ligne « Dernière mise à jour : JJ/MM/AAAA »,
