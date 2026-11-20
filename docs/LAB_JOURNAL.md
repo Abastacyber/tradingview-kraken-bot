@@ -155,3 +155,41 @@ H1 ne pas acheter quand le levier est extrême · H2 investir 50 % quand il est 
 
 Indice Peur & Avidité, positions COT (CFTC), volatilité implicite (Deribit), flux ETF — nécessite d'autoriser de nouvelles sources
 de données dans l'environnement (accord du propriétaire). Puis indicateurs AEGIS (Bollinger, Heikin Ashi) comme aide à l'entrée.
+
+---
+
+## EXP04b — 20/11/2026 — Autres marchés + données institutionnelles et de sentiment
+
+Rapport : `lab/results/EXP04b_marches_institutionnels.md` · Script : `lab/exp04b_marches_et_institutionnels.py` · Données : `lab/data_alt.py`
+
+### A. Le gardien sur d'autres marchés (16 réglages voisins, frais 0,80 %)
+
+| Marché | Réglages gagnants étude ET contrôle | Gardien contrôle | Acheter-garder contrôle | Verdict |
+|---|---|---|---|---|
+| BTC/EUR | 100 % | +58 % (perte max -35 %) | +75 % (-52 %) | ✅ robuste |
+| ETH/EUR | 94 % | +32 % (-46 %) | -6 % (-67 %) | ✅ robuste |
+| BNB/EUR | 100 % | +97 % (-47 %) | +116 % (-58 %) | ✅ robuste (disponibilité sur Kraken à vérifier) |
+| XRP, DOGE | 12 % / 0 % | positif en contrôle mais perdant en étude | | ❌ pas fiable |
+| SOL, ADA | 25 % | perdant | | ❌ |
+| EUR/USD (devise) | 0 % | -14 % | +1 % | ❌ trop calme : les mouvements ne couvrent pas les frais |
+| Or (PAXG) | 0 % | +68 % en contrôle, mais perdant en 2021-2023 (marché sans tendance) | +89 % | ❌ non robuste |
+
+→ **La règle fonctionne sur les grandes cryptos liquides à longues tendances (BTC, ETH, BNB), pas partout.**
+Pas une formule universelle : chaque marché doit passer le test avant d'être tradé.
+
+### B. Filtres « institutionnels » et de sentiment (BTC et ETH, frais 0,80 %)
+
+- **Peur & Avidité** : aucun effet sur BTC (les achats du gardien arrivent rarement en avidité extrême) ;
+  sur ETH, le veto est nuisible et le dosage incohérent (mieux en contrôle, pas en étude). ❌ Rejeté.
+- **Volatilité implicite (DVOL)** : aucun effet. ❌ Rejeté.
+- **Positions COT des gestionnaires d'actifs** : réduire la mise quand les fonds réduisent leur position **diminue la perte
+  maximale dans 100 % des réglages, sur BTC et ETH** (BTC -32 % au lieu de -35 % ; ETH -34 % au lieu de -46 %).
+  Mais sur BTC le rendement baisse nettement (+38 % au lieu de +58 %). Rendement/risque meilleur sur ETH, moins bon sur BTC.
+  ⚠️ Incohérent entre marchés → **non adopté**, gardé comme **candidat à revoir** (outil de réduction du risque, pas de performance).
+
+### Leçons
+
+- Le cœur simple (tendance journalière) reste le meilleur. **Ajouter des indicateurs « de pros » n'a rien amélioré de façon fiable.**
+- La vraie piste d'amélioration suivante est probablement la **diversification** : gardien sur BTC + ETH (+ BNB si disponible sur Kraken),
+  qui ne chutent pas toujours en même temps → à tester (EXP05).
+- Reste à tester : indicateurs AEGIS (Bollinger, Heikin Ashi) pour mieux placer l'entrée.
