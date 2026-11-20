@@ -95,6 +95,7 @@ MAX_SEEN_ALERTS = max(
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("tv-kraken")
 app = Flask(__name__)
+app.json.ensure_ascii = False  # afficher €, é… en clair dans les réponses
 
 _state_lock = threading.Lock()
 _position_lock = threading.Lock()

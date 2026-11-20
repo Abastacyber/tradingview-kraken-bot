@@ -97,3 +97,13 @@ def test_endpoint(monkeypatch, tmp_path):
     assert r.status_code == 200
     assert r.get_json()["position_theorique"] == "ACHETEUR (BTC)"
     assert r.get_json()["ordres"].startswith("aucun")
+
+
+def test_endpoint_shows_euro_sign(monkeypatch, tmp_path):
+    monkeypatch.setenv("STATE_FILE", str(tmp_path / "s.json"))
+    sys.modules.pop("app", None)
+    import app as A
+    monkeypatch.setattr(A.gardien, "fetch_daily_candles", lambda pair: series([400 - i for i in range(300)]))
+    A._gardien_cache.update({"ts": 0.0, "data": None})
+    body = A.app.test_client().get("/gardien/signal").get_data(as_text=True)
+    assert "€" in body and "\\u20ac" not in body
