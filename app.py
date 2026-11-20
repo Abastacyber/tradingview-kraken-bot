@@ -13,6 +13,7 @@ from flask import Flask, request, jsonify
 import ccxt
 
 import gardien
+import gardien_sim
 
 
 # ===== Helpers ENV =====
@@ -672,6 +673,34 @@ def _gardien_refresh() -> Dict[str, Any]:
     return data
 
 
+# --- Étape 3 : portefeuille SIMULÉ du gardien (jamais d'ordre réel, même si DRY_RUN=false) ---
+GARDIEN_CAPITAL_EUR = max(0.0, env_float("GARDIEN_CAPITAL_EUR", 100.0))  # enveloppe ORION (simulée)
+GARDIEN_FEE_PCT = env_float("GARDIEN_FEE_PCT", 0.004)  # ordre limit Kraken Pro palier 1 (maker 0,40 %)
+GARDIEN_STATE_FILE = env_str("GARDIEN_STATE_FILE", "/tmp/gardien_portefeuille.json")
+_gardien_pf_lock = threading.Lock()
+
+
+def _gardien_portfolio() -> Dict[str, Any]:
+    pf = gardien_sim.load(GARDIEN_STATE_FILE)
+    if not pf:
+        pf = gardien_sim.new_portfolio(GARDIEN_CAPITAL_EUR)
+    return pf
+
+
+def _gardien_simulate(signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Applique la décision du jour au portefeuille simulé (une fois par jour clôturé)."""
+    with _gardien_pf_lock:
+        pf = _gardien_portfolio()
+        if pf.get("dernier_jour_traite") == signal["jour_cloture_utc"]:
+            return None
+        price = gardien_sim.fetch_price("XBTEUR")
+        op = gardien_sim.apply_signal(pf, signal, price, GARDIEN_FEE_PCT)
+        gardien_sim.save(GARDIEN_STATE_FILE, pf)
+    if op:
+        log.warning("[GARDIEN-SIM] %s %s @ %.2f (%.2f EUR)", op["type"], op["jour"], op["prix"], op["montant_eur"])
+    return op
+
+
 def _gardien_tick() -> Dict[str, Any]:
     """Une vérification de l'horloge : calcule, compare à la précédente, journalise."""
     previous = _gardien_checks[-1] if _gardien_checks else None
@@ -686,6 +715,9 @@ def _gardien_tick() -> Dict[str, Any]:
         elif not previous or previous.get("jour_cloture_utc") != entry["jour_cloture_utc"]:
             entry["evenement"] = "nouveau jour clôturé"
             log.info("[GARDIEN] jour %s : %s (clôture %.0f)", entry["jour_cloture_utc"], entry["position"], entry["cloture"])
+        op = _gardien_simulate(data)  # une seule décision par jour clôturé (dédoublonnage interne)
+        if op:
+            entry["operation_simulee"] = op["type"]
     except Exception as e:  # Kraken indisponible : on réessaiera à la prochaine vérification
         entry["erreur"] = str(e)[:200]
         log.warning("[GARDIEN] vérification impossible : %s", e)
@@ -719,6 +751,21 @@ def gardien_signal():
     except Exception as e:
         log.warning("[GARDIEN] signal indisponible: %s", e)
         return jsonify({"error": "signal_indisponible", "detail": str(e)}), 503
+
+
+@app.get("/gardien/portefeuille")
+def gardien_portefeuille():
+    """Portefeuille SIMULÉ du gardien : enveloppe, position, opérations, résultat net de frais."""
+    with _gardien_pf_lock:
+        pf = _gardien_portfolio()
+    try:
+        price = gardien_sim.fetch_price("XBTEUR")
+    except Exception:
+        price = None
+    out = gardien_sim.summary(pf, price)
+    out["frais_par_ordre_pct"] = round(GARDIEN_FEE_PCT * 100, 2)
+    out["ordres_reels"] = "aucun (étape 3 : simulation)"
+    return jsonify(out), 200
 
 
 @app.get("/gardien/journal")
