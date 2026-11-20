@@ -51,6 +51,7 @@ Deux circuits distincts :
 | `RESTORE_ON_START` sur Render | false (l'état n'est pas relu au redémarrage) |
 | `render.yaml` du dépôt | ne reflète PAS les réglages réels de Render (fichier non utilisé) |
 | Secrets (clés Kraken + WEBHOOK_SECRET) | exposés le 11/11 → **renouvelés le 11/11** (nouvelle clé « API NEXT GEN » sans droit de retrait, ancienne supprimée ; /health OK) |
+| Frais Kraken | **confirmés le 20/11** : palier 1 = 0,40 % maker / 0,80 % taker |
 | Droit Kraken « Requête » (lire le solde) | non coché sur la nouvelle clé — inutile en DRY_RUN, **nécessaire avant LIVE** |
 | Alertes TradingView | mot de passe à mettre à jour s'il y a des alertes actives (non confirmé) |
 | Ping `/health` chaque minute (Google Apps Script) | ancien maintien en éveil du plan gratuit ; inutile en Starter mais sans danger |
@@ -72,13 +73,15 @@ Deux circuits distincts :
   Peur & Avidité et volatilité implicite : inutiles. Positions COT des fonds : réduisent la perte max mais coûtent du rendement
   sur BTC → non adopté, candidat à revoir. Piste suivante : diversification BTC + ETH (EXP05).
 - **EXP04a (20/11) : le taux de financement (levier) n'améliore PAS le gardien** (rejeté, voir LAB_JOURNAL).
-- **Frais Kraken : hausse du 9 juillet 2026 quasi confirmée** (veille du 15/11, pages d'aide Kraken via moteur de recherche) :
-  palier de départ **0,40 % maker / 0,80 % taker**. Hypothèse de travail désormais : 0,80 % par ordre market.
-  La règle gardien journalier reste gagnante à 0,80 % (EXP02/EXP03). À confirmer sur le compte du propriétaire.
+- **Frais Kraken Pro CONFIRMÉS (page officielle kraken.com/pro/fees, lue le 20/11/2026)** — spot, selon volume 30 j OU avoirs :
+  palier 1 (0 $) **0,40 % maker / 0,80 % taker** · palier 2 (2,5 k$ de volume) 0,30 / 0,60 · palier 3 (10 k$ de volume ou 20 k$ d'avoirs)
+  0,22 / 0,38 · palier 4 (25 k$ ou 50 k$ d'avoirs) 0,20 / 0,35. BTC/EUR et ETH/EUR ne sont pas dans les paires à remise.
+  → Le gardien devra passer des **ordres limit (maker, 0,40 %)** plutôt que market (0,80 %). Moteur du labo réglé par défaut à 0,80 %.
+  BNB/EUR existe sur Kraken.
 
 ## 4. Prochaine action
 
-1. **Propriétaire :** regarder ses frais réels sur Kraken Pro (palier de frais du compte) ; cocher « Requête » sur la clé API.
+1. **Propriétaire :** cocher « Requête » sur la clé API Kraken (avant LIVE). Frais : confirmés, plus rien à fournir.
 2. **Claude — construction du gardien (option 1 décidée le 20/11 : ORION calcule lui-même le signal)** :
    ✅ étape 1 signal lecture seule · étape 2 horloge + journal quotidien des décisions · étape 3 enveloppe ORION_CAPITAL
    + exécution DRY_RUN · étape 4 état durable + réconciliation Kraken · étape 5 stop de protection chez Kraken ·
@@ -104,6 +107,7 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026 (4)** — Frais Kraken confirmés sur la page officielle (0,40 % maker / 0,80 % taker au palier 1). Labo par défaut à 0,80 %.
 - **20/11/2026 (3)** — EXP04b : autres marchés + Peur & Avidité, COT, volatilité implicite (voir LAB_JOURNAL). Correction affichage € sur /gardien/signal.
 - **20/11/2026 (2)** — EXP04a : taux de financement testé comme veto / dosage / sortie → rejeté (n'apporte rien).
   Moteur du labo : investissement partiel possible (paramètre size).

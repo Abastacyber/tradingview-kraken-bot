@@ -23,8 +23,8 @@ import pandas as pd
 
 @dataclass
 class Costs:
-    fee_entry: float = 0.0040   # 0,40 % (taker Kraken, palier de départ)
-    fee_exit: float = 0.0040
+    fee_entry: float = 0.0080   # 0,80 % (taker Kraken Pro palier 1, grille officielle vérifiée le 20/11/2026)
+    fee_exit: float = 0.0080
     slippage: float = 0.0005    # 0,05 % par ordre market
 
     @property
