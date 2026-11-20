@@ -40,6 +40,8 @@ Deux circuits distincts :
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
 | Tests automatiques | 8 tests, tous PASS |
 | **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
+| **Gardien — étape 3** (portefeuille simulé) | **fait le 20/11** : enveloppe `GARDIEN_CAPITAL_EUR` (100 € simulés), ordres limit simulés 0,40 %, `/gardien/portefeuille` ; fichier en /tmp (non durable → étape 4) |
+| Webhook TradingView BUY/SELL | **désactivé le 20/11** (`WEBHOOK_TRADING_ENABLED=false`) : le gardien est le seul décideur ; PING fonctionne. Le script `tools/orion_test_dry_run.ps1` (ancien flux) n'est plus utile |
 | **Gardien — étape 2** (horloge + journal) | **fait le 20/11** : vérification toutes les heures, `/gardien/journal` (30 derniers jours + vérifications) ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
@@ -86,7 +88,7 @@ Deux circuits distincts :
 
 1. **Propriétaire :** cocher « Requête » sur la clé API Kraken (avant LIVE). Frais : confirmés, plus rien à fournir.
 2. **Claude — construction du gardien (option 1 décidée le 20/11 : ORION calcule lui-même le signal)** :
-   ✅ étape 1 signal lecture seule · ✅ étape 2 horloge + journal · étape 3 enveloppe ORION_CAPITAL
+   ✅ étape 1 signal lecture seule · ✅ étape 2 horloge + journal · ✅ étape 3 enveloppe ORION_CAPITAL
    + exécution DRY_RUN en ordres limit simulés · étape 4 état durable + réconciliation Kraken · étape 5 stop de protection chez Kraken ·
    étape 6 rejeu historique + période DRY_RUN · étape 7 micro-LIVE (100 € proposés, décision du propriétaire).
    En parallèle : EXP04 (indicateurs institutionnels + AEGIS comme filtres/dosage). Plus tard : TradingView en « deuxième avis ».
@@ -110,6 +112,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026 (6)** — Gardien étape 3 : portefeuille simulé + `/gardien/portefeuille`. Webhook BUY/SELL TradingView désactivé (gardien seul décideur).
+  Alertes TradingView de l'ancien Pine 15 min à mettre en pause par le propriétaire.
 - **20/11/2026 (5)** — Gardien étape 2 (horloge horaire + `/gardien/journal`). EXP05 diversification (voir LAB_JOURNAL).
 - **20/11/2026 (4)** — Frais Kraken confirmés sur la page officielle (0,40 % maker / 0,80 % taker au palier 1). Labo par défaut à 0,80 %.
 - **20/11/2026 (3)** — EXP04b : autres marchés + Peur & Avidité, COT, volatilité implicite (voir LAB_JOURNAL). Correction affichage € sur /gardien/signal.

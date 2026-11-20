@@ -60,6 +60,7 @@ def load_app(monkeypatch, **env):
         "RESTORE_ON_START": "false",
         "BUY_COOL_SEC": "0",
         "FEE_BUFFER_PCT": "0",
+        "WEBHOOK_TRADING_ENABLED": "true",  # ces tests portent sur l'ancien flux webhook
     }
     base.update(env)
     for k, v in base.items():
@@ -140,3 +141,13 @@ def test_live_still_uses_real_balance(monkeypatch, tmp_path):
     r = post(client, payload("BUY", "t-live-1", quote=25))
     assert r.status_code == 400
     assert r.get_json()["error"] == "insufficient_quote"
+
+
+def test_webhook_trading_disabled_by_default(monkeypatch, tmp_path):
+    mod, _ = load_app(monkeypatch, _tmp=str(tmp_path), WEBHOOK_TRADING_ENABLED="false")
+    client = mod.app.test_client()
+    r = post(client, payload("BUY", "t-disabled-1", quote=25))
+    assert r.status_code == 200 and r.get_json()["decision"] == "ignored"
+    assert client.get("/health").get_json()["has_position"] is False
+    ping = post(client, {"protocol": "orion-v1", "signal": "PING"})
+    assert ping.get_json().get("pong") is True

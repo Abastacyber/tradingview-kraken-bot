@@ -51,6 +51,8 @@ BUY_COOL_SEC           = env_int("BUY_COOL_SEC", 300)
 DRY_RUN                = env_str("DRY_RUN", "false").lower() in ("1","true","yes")
 # Plafond du capital virtuel par trade en DRY_RUN (le solde Kraken réel n'est pas consulté).
 DRY_RUN_MAX_QUOTE      = max(0.0, env_float("DRY_RUN_MAX_QUOTE", 100.0))
+# BUY/SELL TradingView : désactivés par défaut depuis le passage au gardien journalier (20/11/2026).
+WEBHOOK_TRADING_ENABLED = env_str("WEBHOOK_TRADING_ENABLED", "false").lower() in ("1", "true", "yes")
 WEBHOOK_SECRET         = env_str("WEBHOOK_SECRET", env_str("WEBHOOK_TOKEN", ""))
 
 TRAILING_ENABLED          = env_str("TRAILING_ENABLED","true").lower() in ("1","true","yes")
@@ -843,6 +845,17 @@ def webhook():
                     "pong": True,
                     "protocol": ORION_PROTOCOL,
                     "ts": int(time.time()),
+                }), 200
+
+            # ORION GARDIEN : le signal journalier calculé par ORION est le seul décideur.
+            # Les BUY/SELL TradingView sont ignorés tant que WEBHOOK_TRADING_ENABLED=false.
+            if not WEBHOOK_TRADING_ENABLED:
+                log.info("Webhook %s ignoré : le gardien journalier est le seul décideur", signal)
+                return jsonify({
+                    "accepted": False,
+                    "decision": "ignored",
+                    "reason": "webhook_trading_disabled_gardien_mode",
+                    "detail": "Les décisions sont prises par le gardien journalier (/gardien/signal).",
                 }), 200
 
             # Protection contre les alertes reçues plusieurs fois.
