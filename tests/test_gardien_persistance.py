@@ -62,3 +62,17 @@ def test_portfolio_and_journal_survive_restart(monkeypatch, tmp_path):
     journal = B.app.test_client().get("/gardien/journal").get_json()
     assert journal["horloge"]["nb_verifications_enregistrees"] == 2
     assert "durable" in journal["stockage"]
+
+
+def test_journal_reads_checks_written_by_another_process(monkeypatch, tmp_path):
+    """Sur Render, l'horloge peut tourner dans un autre processus que celui qui affiche la page :
+    /gardien/journal doit relire le fichier du disque, pas seulement sa mémoire vive."""
+    from test_gardien import series
+    A = _start_app(monkeypatch, tmp_path)
+    monkeypatch.setattr(A.gardien, "fetch_daily_candles", lambda pair: series([400 - i for i in range(300)]))
+    A._gardien_checks.clear()  # mémoire vive vide (processus qui n'a pas l'horloge)
+    A.gardien_sim.save(A.GARDIEN_CHECKS_FILE, [{"verifie_a_utc": "2026-11-20 12:27", "position": "EN EUROS"},
+                                               {"verifie_a_utc": "2026-11-20 13:27", "position": "EN EUROS"}])
+    j = A.app.test_client().get("/gardien/journal").get_json()
+    assert j["horloge"]["nb_verifications_enregistrees"] == 2
+    assert j["dernieres_verifications"][0]["verifie_a_utc"] == "2026-11-20 13:27"  # la plus récente d'abord

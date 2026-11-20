@@ -39,7 +39,7 @@ Deux circuits distincts :
 | Branche de travail GitHub | `feature/orion-protocol-v1` |
 | Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
-| Tests automatiques | 34 tests : 33 PASS, 1 ignoré hors ligne (parité labo sur données réelles) |
+| Tests automatiques | 35 tests : 34 PASS, 1 ignoré hors ligne (parité labo sur données réelles) |
 | **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
 | **Gardien — étape 3** (portefeuille simulé) | **fait le 20/11** : enveloppe `GARDIEN_CAPITAL_EUR` (100 € simulés), ordres limit simulés 0,40 %, `/gardien/portefeuille` ; fichier en /tmp (non durable → étape 4) |
 | Webhook TradingView BUY/SELL | **désactivé le 20/11** (`WEBHOOK_TRADING_ENABLED=false`) : le gardien est le seul décideur ; PING fonctionne. Le script `tools/orion_test_dry_run.ps1` (ancien flux) n'est plus utile |
@@ -117,6 +117,7 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **20/11/2026 (11)** — Contrôle du propriétaire : `/gardien/journal` affichait 0 vérification alors que l'horloge tourne. Cause probable : l'horloge tourne dans un autre processus gunicorn que celui qui répond aux pages (mémoire vive non partagée). Correctif : la page relit le fichier du disque. 35 tests (34 PASS, 1 ignoré).
 - **20/11/2026 (10)** — **Étape 4 validée en ligne** : disque `/var/data` ajouté, `/health` → `gardien_stockage_durable: true`, `creds_ok: true`. Prochaine étape Claude : étape 5 (stop de protection chez Kraken).
 - **20/11/2026 (9)** — Réglages Render relus (export `.env` partagé → clés renouvelées : nouvelle clé Kraken « THE LAST ONE STANDING »). GO du propriétaire pour mettre l'étape 4 en ligne (fusion dans `feature/orion-protocol-v1`). Disque `/var/data` en cours d'ajout.
 - **20/11/2026 (8)** — Reprise en nouvelle session : aucune nouvelle veille (prochaine le 22/11) ; signal au 19/11 toujours EN EUROS.

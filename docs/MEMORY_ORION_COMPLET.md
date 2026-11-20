@@ -174,7 +174,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | `app.py` | Serveur Flask : routes, ancien flux webhook (achat/vente désactivés), horloge et simulation du gardien |
 | `gardien.py` | Signal journalier en Python pur : EMA, rejeu de la règle, journal |
 | `gardien_sim.py` | Portefeuille simulé : enveloppe, ordres limit simulés, résultat net de frais |
-| `tests/` | 34 tests automatiques (33 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
+| `tests/` | 35 tests automatiques (34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
 | `lab/` | Laboratoire : données, moteur de backtest, stratégies, expériences, rapports dans `lab/results/` |
 | `docs/MEMORY_ORION.md` | Mémoire vivante, datée (fait foi) |
 | `docs/MEMORY_ORION_COMPLET.md` | Ce document : mémoire complète, pour reprendre de zéro |

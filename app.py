@@ -799,11 +799,15 @@ def gardien_journal():
         jours = gardien.daily_history(candles, 30)
     except Exception as e:
         return jsonify({"error": "journal_indisponible", "detail": str(e)}), 503
+    # Le fichier du disque fait foi : l'horloge peut tourner dans un autre processus gunicorn que celui
+    # qui répond à cette page (sa mémoire vive serait alors vide). Repli sur la mémoire si fichier absent.
+    saved = gardien_sim.load(GARDIEN_CHECKS_FILE)
+    checks = saved if isinstance(saved, list) else list(_gardien_checks)
     return jsonify({
         "horloge": {"active": GARDIEN_CLOCK_ENABLED, "verification_toutes_les_sec": GARDIEN_CLOCK_SEC,
-                    "nb_verifications_enregistrees": len(_gardien_checks)},
+                    "nb_verifications_enregistrees": len(checks)},
         "stockage": _gardien_storage(),
-        "dernieres_verifications": list(_gardien_checks)[-24:][::-1],
+        "dernieres_verifications": checks[-24:][::-1],
         "derniers_jours": jours,
         "ordres": "aucun (étape 2 : horloge + journal, lecture seule)",
     }), 200
