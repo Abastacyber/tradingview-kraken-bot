@@ -193,3 +193,31 @@ Pas une formule universelle : chaque marché doit passer le test avant d'être t
 - La vraie piste d'amélioration suivante est probablement la **diversification** : gardien sur BTC + ETH (+ BNB si disponible sur Kraken),
   qui ne chutent pas toujours en même temps → à tester (EXP05).
 - Reste à tester : indicateurs AEGIS (Bollinger, Heikin Ashi) pour mieux placer l'entrée.
+
+---
+
+## EXP05 — 20/11/2026 — Diversifier le gardien (BTC seul / BTC+ETH / BTC+ETH+BNB)
+
+Rapport : `lab/results/EXP05_diversification.md` · Script : `lab/exp05_diversification.py`
+
+Enveloppes à parts égales, un gardien par marché, 16 réglages voisins. Critère fixé avant : meilleur rapport
+rendement ÷ perte max que BTC seul, sur l'étude ET le contrôle, pour la majorité des réglages.
+
+### Ce que disent les données (période de contrôle 2024-2026)
+
+| Portefeuille | Ordres limit 0,40 % | Ordres market 0,80 % | Réglages meilleurs que BTC seul |
+|---|---|---|---|
+| BTC seul | +70 %, perte max -34 % | +58 %, -35 % | — |
+| BTC + ETH | +61 %, -35 % | +48 %, -35 % | 25-31 % ❌ |
+| BTC + ETH + BNB (rééquilibrage annuel) | **+78 %, -30 %** | **+67 %, -32 %** | 62 % ✅ (100 % en étude) |
+
+- **BTC + ETH n'aide pas** : les deux bougent trop ensemble (corrélation 0,81).
+- **Ajouter BNB aide** (corrélation plus faible, 0,66) : un peu plus de rendement et une perte max plus faible. Le critère
+  est rempli, mais de peu en contrôle (62 %). La période d'étude (100 %) est flattée par l'envolée des altcoins de 2021.
+- **Ordres limit vs market : +12 points sur BTC en contrôle** (+70 % au lieu de +58 %). Confirme le choix des ordres limit.
+
+### Leçons et décision proposée
+
+- Gardien v1 = **BTC seul** (le plus simple et le plus solide). Panier BTC + ETH + BNB = **variante v2 candidate**,
+  une fois le gardien BTC validé en réel.
+- Prudence sur BNB : c'est le jeton de la plateforme Binance → risque propre à une seule entreprise.

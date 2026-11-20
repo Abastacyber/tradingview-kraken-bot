@@ -40,6 +40,7 @@ Deux circuits distincts :
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
 | Tests automatiques | 8 tests, tous PASS |
 | **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
+| **Gardien — étape 2** (horloge + journal) | **fait le 20/11** : vérification toutes les heures, `/gardien/journal` (30 derniers jours + vérifications) ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
 | Anti-doublon persistant | à faire |
@@ -69,6 +70,8 @@ Deux circuits distincts :
 - **EXP03 (11/11) : règle candidate « ORION GARDIEN v1 »** — acheteur tant que EMA20>EMA50 et prix>EMA200 (journalier),
   vente quand EMA20<EMA50, stop de protection chez Kraken. Confirmée sur ETH/EUR (+40 % quand ETH fait -5 %).
   Au 10/11/2026 : conditions NON réunies (le gardien serait en euros).
+- **EXP05 (20/11) : diversification** — BTC+ETH n'aide pas (trop corrélés) ; BTC+ETH+BNB aide un peu (perte max -30 % au lieu de -34 %).
+  Gardien v1 = BTC seul ; panier BTC+ETH+BNB = variante v2 candidate. Ordres limit : +12 points vs market sur 2024-2026.
 - **EXP04b (20/11) : le gardien est robuste sur BTC, ETH et BNB ; pas sur SOL/ADA/XRP/DOGE, ni EUR/USD, ni l'or.**
   Peur & Avidité et volatilité implicite : inutiles. Positions COT des fonds : réduisent la perte max mais coûtent du rendement
   sur BTC → non adopté, candidat à revoir. Piste suivante : diversification BTC + ETH (EXP05).
@@ -83,8 +86,8 @@ Deux circuits distincts :
 
 1. **Propriétaire :** cocher « Requête » sur la clé API Kraken (avant LIVE). Frais : confirmés, plus rien à fournir.
 2. **Claude — construction du gardien (option 1 décidée le 20/11 : ORION calcule lui-même le signal)** :
-   ✅ étape 1 signal lecture seule · étape 2 horloge + journal quotidien des décisions · étape 3 enveloppe ORION_CAPITAL
-   + exécution DRY_RUN · étape 4 état durable + réconciliation Kraken · étape 5 stop de protection chez Kraken ·
+   ✅ étape 1 signal lecture seule · ✅ étape 2 horloge + journal · étape 3 enveloppe ORION_CAPITAL
+   + exécution DRY_RUN en ordres limit simulés · étape 4 état durable + réconciliation Kraken · étape 5 stop de protection chez Kraken ·
    étape 6 rejeu historique + période DRY_RUN · étape 7 micro-LIVE (100 € proposés, décision du propriétaire).
    En parallèle : EXP04 (indicateurs institutionnels + AEGIS comme filtres/dosage). Plus tard : TradingView en « deuxième avis ».
 3. **Décision prise le 20/11 :** ORION calcule lui-même le signal (option 1) ; TradingView reviendra en deuxième avis.
@@ -107,6 +110,7 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026 (5)** — Gardien étape 2 (horloge horaire + `/gardien/journal`). EXP05 diversification (voir LAB_JOURNAL).
 - **20/11/2026 (4)** — Frais Kraken confirmés sur la page officielle (0,40 % maker / 0,80 % taker au palier 1). Labo par défaut à 0,80 %.
 - **20/11/2026 (3)** — EXP04b : autres marchés + Peur & Avidité, COT, volatilité implicite (voir LAB_JOURNAL). Correction affichage € sur /gardien/signal.
 - **20/11/2026 (2)** — EXP04a : taux de financement testé comme veto / dosage / sortie → rejeté (n'apporte rien).
