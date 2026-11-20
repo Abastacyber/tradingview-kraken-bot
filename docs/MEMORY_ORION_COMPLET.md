@@ -225,7 +225,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
   - droit « Requête » sur la clé API ;
   - anti-doublon persistant ;
   - vérification de l'écart de prix (`MAX_PRICE_DEVIATION_PCT`, présent mais non branché).
-- **À mettre à jour quand le gardien passera en réel :** `FEE_BUFFER_PCT` (0,20 % par défaut dans le code ; une valeur différente sur Render reste possible, non vérifiée) est inférieur aux frais réels.
+- **À mettre à jour quand le gardien passera en réel :** `FEE_BUFFER_PCT` (0,15 % réglé sur Render, vérifié le 20/11 ; 0,20 % par défaut dans le code) est inférieur aux frais réels.
 
 ---
 
@@ -277,6 +277,8 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 1. **Jamais de passage en argent réel** (`DRY_RUN=false`) sans décision GO explicite du propriétaire.
 2. **Jamais de secret** (clé API, mot de passe) dans un fichier, un commit, un message ou une capture d'écran.
    - Le 11/11/2026, un fichier `.env` a été partagé dans la conversation, puis une capture montrant un mot de passe. Tout a été renouvelé.
+   - Le 20/11/2026, l'export `.env` de Render a de nouveau été partagé dans la conversation → clé Kraken et WEBHOOK_SECRET **à renouveler**.
+   - Pour montrer ses réglages Render : envoyer une capture où les valeurs secrètes sont masquées, jamais le fichier `.env` exporté.
 3. **Une seule modification technique à la fois**, testée avec `pytest -q` avant la suivante.
 4. **Ne jamais inventer un paramètre de trading** : le mesurer dans le laboratoire.
 5. **Toujours raisonner net de frais**, glissement de prix compris.
