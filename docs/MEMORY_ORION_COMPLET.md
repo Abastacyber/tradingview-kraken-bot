@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action :** le propriétaire ajoute le disque persistant sur Render (étape 4, code prêt le 20/11), puis Claude passe à l'étape 5. Voir § 9.
+**Prochaine action technique : gardien, étape 5** (stop de protection posé chez Kraken). Voir § 9.
 
 ---
 
@@ -75,7 +75,7 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 
 | Élément | Valeur |
 |---|---|
-| Service Render | « TV-KRKN-Bot-V2 > ORION PROJECT 0.5 », plan **Starter** (7 $/mois, pas de mise en veille) |
+| Service Render | « TV-KRKN-Bot-V2 > ORION PROJECT 0.5 », plan **Starter** (7 $/mois, pas de mise en veille), disque persistant `/var/data` 1 Go (≈ 0,25 $/mois) |
 | Adresse | https://tv-krkn-bot-v2.onrender.com |
 | Déploiement | Automatique depuis GitHub, branche `feature/orion-protocol-v1` |
 | Démarrage | gunicorn, 1 processus (`gunicorn.conf.py`) |
@@ -191,8 +191,8 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 1. Signal en lecture seule, `/gardien/signal` | ✅ 20/11 ; test de parité exacte avec le laboratoire |
 | 2. Horloge horaire et journal, `/gardien/journal` | ✅ 20/11 |
 | 3. Enveloppe et portefeuille simulé, `/gardien/portefeuille` | ✅ 20/11 ; 100 € simulés, ordres limit à 0,40 % |
-| 4. Mémoire durable | 🟡 **code fait le 20/11** (disque persistant Render, réglage `GARDIEN_DATA_DIR`) ; **reste : ajouter le disque sur Render** (propriétaire). La réconciliation avec Kraken viendra avant le passage en réel |
-| 5. Stop de protection posé chez Kraken | à faire |
+| 4. Mémoire durable | ✅ 20/11 : disque persistant Render `/var/data` (1 Go), `GARDIEN_DATA_DIR=/var/data`, vérifié sur `/health`. La réconciliation avec Kraken viendra avant le passage en réel |
+| 5. Stop de protection posé chez Kraken | ⏭️ **prochaine étape** |
 | 6. Rejeu historique et période de simulation | à faire |
 | 7. Micro-réel (proposition : 100 €, décision du propriétaire) | à faire |
 
@@ -204,7 +204,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
   - `GARDIEN_CAPITAL_EUR=100` : enveloppe simulée ;
   - `GARDIEN_FEE_PCT=0.004` : frais par ordre ;
   - `GARDIEN_CLOCK_ENABLED=true` et `GARDIEN_CLOCK_SEC=3600` : l'horloge et sa fréquence ;
-  - `GARDIEN_DATA_DIR=/tmp` : dossier de stockage du portefeuille simulé et du journal. **À régler sur `/var/data`** (le disque persistant) ;
+  - `GARDIEN_DATA_DIR=/var/data` (réglé sur Render le 20/11 ; défaut du code : /tmp) : dossier du portefeuille simulé et du journal, sur le disque persistant ;
   - `GARDIEN_STATE_FILE` et `GARDIEN_CHECKS_FILE` : fichiers précis, déduits du dossier (ne pas les régler, sauf besoin particulier) ;
   - `GARDIEN_CACHE_SEC=600` : durée de mémorisation du signal.
 - **Webhook :** `WEBHOOK_TRADING_ENABLED=false` par défaut. Les ordres d'achat et de vente de TradingView sont ignorés ; le PING fonctionne.
@@ -249,7 +249,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 
 1. **Étape 4 : mémoire durable.** **Choix du 20/11 : disque persistant Render** (environ 0,25 $/Go/mois, 1 Go suffit).
    Écartés : petite base de données (plus chère, plus de code), reconstruction depuis Kraken seule (elle viendra
-   *en plus*, comme vérification, avant le passage en réel). Code fait ; reste l'ajout du disque par le propriétaire.
+   *en plus*, comme vérification, avant le passage en réel). Fait et vérifié en ligne le 20/11.
 2. **Étape 5 :** stop de protection posé chez Kraken (environ 3 ATR), qui survit à une panne du serveur.
 3. **Étape 6 :** rejouer l'historique dans le vrai code du bot, puis plusieurs semaines de simulation en direct.
 4. **Étape 7 : micro-réel.** Dépôt de 100 € proposé, décision du propriétaire. Un premier ordre contrôlé, puis vérification de tout (Kraken, frais, état, stop).
@@ -265,7 +265,6 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 
 ### Actions du propriétaire
 
-- **Ajouter le disque persistant sur Render** (nom `orion-data`, chemin `/var/data`, 1 Go) et le réglage `GARDIEN_DATA_DIR=/var/data`.
 - **Mettre en pause** les alertes TradingView de l'ancien Pine Script 15 min (garder le script).
 - **Cocher « Requête »** sur la clé API Kraken (avant le passage en réel).
 - Ne **rien** déposer sur Kraken avant que Claude annonce l'étape 7.
