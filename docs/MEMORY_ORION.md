@@ -6,6 +6,7 @@
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
 Historique long et philosophie : Bible ORION sur Google Drive (dossier « PROJECT ORION BIBLE »).
 Conclusions chiffrées : `docs/LAB_JOURNAL.md`. Veille : `docs/veille/`.
+Document de reprise complet (tout le projet en un fichier) : `docs/MEMORY_ORION_COMPLET.md`.
 Ne jamais écrire de secret ou de clé API dans ce fichier.
 
 ---
@@ -112,6 +113,7 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026 (7)** — Document de reprise complet `docs/MEMORY_ORION_COMPLET.md` remis au propriétaire.
 - **20/11/2026 (6)** — Gardien étape 3 : portefeuille simulé + `/gardien/portefeuille`. Webhook BUY/SELL TradingView désactivé (gardien seul décideur).
   Alertes TradingView de l'ancien Pine 15 min à mettre en pause par le propriétaire.
 - **20/11/2026 (5)** — Gardien étape 2 (horloge horaire + `/gardien/journal`). EXP05 diversification (voir LAB_JOURNAL).
