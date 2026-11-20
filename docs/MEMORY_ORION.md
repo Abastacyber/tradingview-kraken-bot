@@ -5,6 +5,7 @@
 
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
 Historique long et philosophie : Bible ORION sur Google Drive (dossier « PROJECT ORION BIBLE »).
+Vue d'ensemble pour reprendre de zéro : `docs/MEMORY_ORION_COMPLET.md` (ce fichier-ci fait foi en cas d'écart).
 Conclusions chiffrées : `docs/LAB_JOURNAL.md`. Veille : `docs/veille/`.
 Ne jamais écrire de secret ou de clé API dans ce fichier.
 
@@ -38,10 +39,11 @@ Deux circuits distincts :
 | Branche de travail GitHub | `feature/orion-protocol-v1` |
 | Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
-| Tests automatiques | 8 tests, tous PASS |
+| Tests automatiques | 34 tests : 33 PASS, 1 ignoré hors ligne (parité labo sur données réelles) |
 | **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
 | **Gardien — étape 3** (portefeuille simulé) | **fait le 20/11** : enveloppe `GARDIEN_CAPITAL_EUR` (100 € simulés), ordres limit simulés 0,40 %, `/gardien/portefeuille` ; fichier en /tmp (non durable → étape 4) |
 | Webhook TradingView BUY/SELL | **désactivé le 20/11** (`WEBHOOK_TRADING_ENABLED=false`) : le gardien est le seul décideur ; PING fonctionne. Le script `tools/orion_test_dry_run.ps1` (ancien flux) n'est plus utile |
+| **Gardien — étape 4** (mémoire durable) | **code fait le 20/11** : dossier `GARDIEN_DATA_DIR` (défaut /tmp) ; portefeuille + journal relus au redémarrage ; fichier abîmé mis de côté, jamais effacé ; `/health` affiche `gardien_stockage_durable`. **Reste : disque Render à ajouter par le propriétaire** (`/var/data`, 1 Go) + `GARDIEN_DATA_DIR=/var/data` |
 | **Gardien — étape 2** (horloge + journal) | **fait le 20/11** : vérification toutes les heures, `/gardien/journal` (30 derniers jours + vérifications) ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
@@ -86,10 +88,13 @@ Deux circuits distincts :
 
 ## 4. Prochaine action
 
-1. **Propriétaire :** cocher « Requête » sur la clé API Kraken (avant LIVE). Frais : confirmés, plus rien à fournir.
+1. **Propriétaire :** ajouter le disque persistant sur Render (nom `orion-data`, chemin `/var/data`, 1 Go) + réglage
+   `GARDIEN_DATA_DIR=/var/data` ; vérifier ensuite que `/health` affiche `"gardien_stockage_durable": true`.
+   Puis : cocher « Requête » sur la clé API Kraken (avant LIVE) ; mettre en pause les alertes de l'ancien Pine 15 min.
 2. **Claude — construction du gardien (option 1 décidée le 20/11 : ORION calcule lui-même le signal)** :
    ✅ étape 1 signal lecture seule · ✅ étape 2 horloge + journal · ✅ étape 3 enveloppe ORION_CAPITAL
-   + exécution DRY_RUN en ordres limit simulés · étape 4 état durable + réconciliation Kraken · étape 5 stop de protection chez Kraken ·
+   + exécution DRY_RUN en ordres limit simulés · 🟡 étape 4 état durable (code fait, disque à ajouter ; réconciliation Kraken
+   avant LIVE) · **prochaine pour Claude : étape 5** · étape 5 stop de protection chez Kraken ·
    étape 6 rejeu historique + période DRY_RUN · étape 7 micro-LIVE (100 € proposés, décision du propriétaire).
    En parallèle : EXP04 (indicateurs institutionnels + AEGIS comme filtres/dosage). Plus tard : TradingView en « deuxième avis ».
 3. **Décision prise le 20/11 :** ORION calcule lui-même le signal (option 1) ; TradingView reviendra en deuxième avis.
@@ -111,6 +116,9 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **20/11/2026 (7)** — Reprise en nouvelle session : aucune nouvelle veille (prochaine le 22/11) ; signal au 19/11 toujours EN EUROS.
+  Mémoire complète enregistrée (`docs/MEMORY_ORION_COMPLET.md`). Étape 4 : **disque persistant Render choisi** par le propriétaire ;
+  code fait et testé (34 tests). Reste : ajout du disque sur Render par le propriétaire.
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
 - **20/11/2026 (6)** — Gardien étape 3 : portefeuille simulé + `/gardien/portefeuille`. Webhook BUY/SELL TradingView désactivé (gardien seul décideur).
   Alertes TradingView de l'ancien Pine 15 min à mettre en pause par le propriétaire.
