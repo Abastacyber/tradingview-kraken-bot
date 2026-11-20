@@ -80,7 +80,7 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 | Déploiement | Automatique depuis GitHub, branche `feature/orion-protocol-v1` |
 | Démarrage | gunicorn, 1 processus (`gunicorn.conf.py`) |
 | Dépôt | github.com/Abastacyber/tradingview-kraken-bot (public). Autres branches : `main`, `develop`, `archive/orion-v0.9-legacy`, `orion-veille` |
-| Clé API Kraken | « API NEXT GEN », créée le 11/11/2026, **sans droit de retrait**. La case « Requête » (lire les fonds) reste à cocher avant le passage en réel |
+| Clé API Kraken | « THE LAST ONE STANDING », créée le 20/11/2026 (remplace « API NEXT GEN »), **sans droit de retrait**. La case « Requête » (lire les fonds) reste à cocher avant le passage en réel |
 | Surveillance | Un Google Apps Script appelle `/health` chaque minute. Inutile avec le plan Starter, mais sans danger |
 
 ### Les pages à ouvrir dans un navigateur (aucun secret)
@@ -277,7 +277,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 1. **Jamais de passage en argent réel** (`DRY_RUN=false`) sans décision GO explicite du propriétaire.
 2. **Jamais de secret** (clé API, mot de passe) dans un fichier, un commit, un message ou une capture d'écran.
    - Le 11/11/2026, un fichier `.env` a été partagé dans la conversation, puis une capture montrant un mot de passe. Tout a été renouvelé.
-   - Le 20/11/2026, l'export `.env` de Render a de nouveau été partagé dans la conversation → clé Kraken et WEBHOOK_SECRET **à renouveler**.
+   - Le 20/11/2026, l'export `.env` de Render a de nouveau été partagé dans la conversation → clés renouvelées le jour même (nouvelle clé Kraken « THE LAST ONE STANDING »).
    - Pour montrer ses réglages Render : envoyer une capture où les valeurs secrètes sont masquées, jamais le fichier `.env` exporté.
 3. **Une seule modification technique à la fois**, testée avec `pytest -q` avant la suivante.
 4. **Ne jamais inventer un paramètre de trading** : le mesurer dans le laboratoire.

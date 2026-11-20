@@ -56,7 +56,7 @@ Deux circuits distincts :
 | `RESTORE_ON_START` sur Render | false (l'état n'est pas relu au redémarrage) |
 | `render.yaml` du dépôt | ne reflète PAS les réglages réels de Render (fichier non utilisé) |
 | Secrets (clés Kraken + WEBHOOK_SECRET) | exposés le 11/11 → **renouvelés le 11/11** (nouvelle clé « API NEXT GEN » sans droit de retrait, ancienne supprimée ; /health OK) |
-| **Secrets — 20/11** | export `.env` de Render partagé dans la conversation → **clé Kraken + WEBHOOK_SECRET à renouveler** (le WEBHOOK_SECRET contenait le texte d'une commande PowerShell au lieu d'un code aléatoire) |
+| **Secrets — 20/11** | export `.env` de Render partagé dans la conversation → **clés renouvelées le 20/11** par le propriétaire : nouvelle clé Kraken « THE LAST ONE STANDING » (l'ancienne « API NEXT GEN » doit être supprimée) |
 | `FEE_BUFFER_PCT` sur Render | 0,0015 (0,15 %), vérifié le 20/11 ; aucun `GARDIEN_*` réglé sur Render |
 | Frais Kraken | **confirmés le 20/11** : palier 1 = 0,40 % maker / 0,80 % taker |
 | Droit Kraken « Requête » (lire le solde) | non coché sur la nouvelle clé — inutile en DRY_RUN, **nécessaire avant LIVE** |
@@ -118,11 +118,12 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
-- **20/11/2026 (8)** — Réglages Render relus (export `.env` partagé → secrets à renouveler). Disque en cours d'ajout par le propriétaire.
-- **20/11/2026 (7)** — Reprise en nouvelle session : aucune nouvelle veille (prochaine le 22/11) ; signal au 19/11 toujours EN EUROS.
-  Mémoire complète enregistrée (`docs/MEMORY_ORION_COMPLET.md`). Étape 4 : **disque persistant Render choisi** par le propriétaire ;
+- **20/11/2026 (9)** — Réglages Render relus (export `.env` partagé → clés renouvelées : nouvelle clé Kraken « THE LAST ONE STANDING »). GO du propriétaire pour mettre l'étape 4 en ligne (fusion dans `feature/orion-protocol-v1`). Disque `/var/data` en cours d'ajout.
+- **20/11/2026 (8)** — Reprise en nouvelle session : aucune nouvelle veille (prochaine le 22/11) ; signal au 19/11 toujours EN EUROS.
+  Mémoire complète corrigée (`docs/MEMORY_ORION_COMPLET.md`). Étape 4 : **disque persistant Render choisi** par le propriétaire ;
   code fait et testé (34 tests). Reste : ajout du disque sur Render par le propriétaire.
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026 (7)** — Document de reprise complet `docs/MEMORY_ORION_COMPLET.md` remis au propriétaire.
 - **20/11/2026 (6)** — Gardien étape 3 : portefeuille simulé + `/gardien/portefeuille`. Webhook BUY/SELL TradingView désactivé (gardien seul décideur).
   Alertes TradingView de l'ancien Pine 15 min à mettre en pause par le propriétaire.
 - **20/11/2026 (5)** — Gardien étape 2 (horloge horaire + `/gardien/journal`). EXP05 diversification (voir LAB_JOURNAL).
