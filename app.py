@@ -12,6 +12,8 @@ from typing import Any, Dict, Tuple, Optional, Callable
 from flask import Flask, request, jsonify
 import ccxt
 
+import gardien
+
 
 # ===== Helpers ENV =====
 def env_str(name: str, default: str = "") -> str:
@@ -646,6 +648,28 @@ def health():
         "position_id": st.get("position_id"),
         "ts": int(time.time())
     }), 200
+
+# ===== ORION GARDIEN v1 — signal journalier (lecture seule) =====
+_gardien_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_gardien_lock = threading.Lock()
+GARDIEN_CACHE_SEC = env_int("GARDIEN_CACHE_SEC", 600)
+
+
+@app.get("/gardien/signal")
+def gardien_signal():
+    """Position théorique du gardien journalier. Ne passe AUCUN ordre."""
+    with _gardien_lock:
+        if _gardien_cache["data"] and time.time() - _gardien_cache["ts"] < GARDIEN_CACHE_SEC:
+            return jsonify(_gardien_cache["data"]), 200
+        try:
+            data = gardien.compute_signal(gardien.fetch_daily_candles("XBTEUR"))
+        except Exception as e:
+            log.warning("[GARDIEN] signal indisponible: %s", e)
+            return jsonify({"error": "signal_indisponible", "detail": str(e)}), 503
+        data["calcule_a_utc"] = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
+        _gardien_cache.update({"ts": time.time(), "data": data})
+        return jsonify(data), 200
+
 
 @app.get("/debug/balances")
 def debug_balances():

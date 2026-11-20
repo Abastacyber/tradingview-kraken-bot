@@ -1,6 +1,6 @@
 # ORION — MÉMOIRE VIVANTE
 
-**Dernière mise à jour : 18/11/2026**
+**Dernière mise à jour : 20/11/2026**
 **Statut : DRY_RUN uniquement — LIVE verrouillé**
 
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
@@ -39,6 +39,7 @@ Deux circuits distincts :
 | Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
 | Tests automatiques | 8 tests, tous PASS |
+| **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
 | Anti-doublon persistant | à faire |
@@ -74,10 +75,12 @@ Deux circuits distincts :
 ## 4. Prochaine action
 
 1. **Propriétaire :** regarder ses frais réels sur Kraken Pro (palier de frais du compte) ; cocher « Requête » sur la clé API.
-2. **Claude :** transformer ORION en « gardien journalier » (voie A décidée le 11/11), par petites étapes testées :
-   calcul du signal journalier, enveloppe ORION_CAPITAL, état durable + réconciliation Kraken, stop posé chez Kraken.
-   Puis DRY_RUN, puis micro-LIVE (montant à décider par le propriétaire, proposition : 100 €).
-3. **Décision à prendre :** qui calcule le signal journalier — ORION lui-même (données Kraken, recommandé) ou TradingView ?
+2. **Claude — construction du gardien (option 1 décidée le 20/11 : ORION calcule lui-même le signal)** :
+   ✅ étape 1 signal lecture seule · étape 2 horloge + journal quotidien des décisions · étape 3 enveloppe ORION_CAPITAL
+   + exécution DRY_RUN · étape 4 état durable + réconciliation Kraken · étape 5 stop de protection chez Kraken ·
+   étape 6 rejeu historique + période DRY_RUN · étape 7 micro-LIVE (100 € proposés, décision du propriétaire).
+   En parallèle : EXP04 (indicateurs institutionnels + AEGIS comme filtres/dosage). Plus tard : TradingView en « deuxième avis ».
+3. **Décision prise le 20/11 :** ORION calcule lui-même le signal (option 1) ; TradingView reviendra en deuxième avis.
 
 ## 4bis. Reprendre dans une nouvelle conversation
 
@@ -97,6 +100,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026** — Option 1 décidée. Gardien étape 1 : `gardien.py` + `/gardien/signal` (lecture seule, 16 tests dont parité labo).
+  Signal au 19/11 : EN EUROS (clôture 56 468 €, sous EMA20/50/200), dernier changement le 06/11.
 - **18/11/2026** — Veille du 15/11 récupérée (`docs/veille/VEILLE_2026-11-15.md`) : BTC -12 % en 4 jours (58 293 € le 14/11),
   régime baissier, gardien en euros (aurait évité la chute) ; frais 0,40/0,80 % quasi confirmés. La veille automatique
   ne peut pas écrire sur GitHub → corrigée : elle rend son rapport dans sa session, récupéré à chaque séance (CLAUDE.md).
