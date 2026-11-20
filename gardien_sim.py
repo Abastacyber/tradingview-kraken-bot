@@ -103,18 +103,36 @@ def summary(pf: dict, price: Optional[float]) -> dict:
     return out
 
 
-def load(path: str) -> Optional[dict]:
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
+def load(path: str):
+    """Relit un fichier JSON du gardien. Absent → None.
+    Illisible (fichier abîmé) → il est mis de côté sous un autre nom (jamais effacé) et None est renvoyé."""
+    if not os.path.exists(path):
         return None
-    return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        try:
+            os.replace(path, f"{path}.corrompu-{int(time.time())}")
+        except OSError:
+            pass
+        return None
 
 
-def save(path: str, pf: dict) -> None:
+def save(path: str, data) -> None:
+    """Écriture sûre : fichier temporaire puis remplacement (pas de fichier à moitié écrit en cas de coupure)."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(pf, f, ensure_ascii=False)
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+def is_durable(path: str) -> bool:
+    """Le stockage survit-il à un redéploiement Render ? /tmp est effacé, un disque persistant (ex. /var/data) non."""
+    real = os.path.realpath(path)
+    return not (real == "/tmp" or real.startswith("/tmp/"))

@@ -650,6 +650,7 @@ def health():
         "shorting": ENABLE_SHORTING,
         "has_position": bool(st["has_position"]),
         "position_id": st.get("position_id"),
+        "gardien_stockage_durable": _gardien_storage()["durable"],
         "ts": int(time.time())
     }), 200
 
@@ -661,7 +662,11 @@ GARDIEN_CACHE_SEC = env_int("GARDIEN_CACHE_SEC", 600)
 
 GARDIEN_CLOCK_ENABLED = env_str("GARDIEN_CLOCK_ENABLED", "true").lower() in ("1", "true", "yes")
 GARDIEN_CLOCK_SEC = max(60, env_int("GARDIEN_CLOCK_SEC", 3600))
-_gardien_checks: "deque[Dict[str, Any]]" = deque(maxlen=200)  # vérifications de l'horloge (depuis le démarrage)
+# Étape 4 : dossier de stockage du gardien. Sur Render, pointer vers le disque persistant (ex. /var/data)
+# pour que le portefeuille simulé et le journal survivent aux redémarrages. Par défaut /tmp (effacé à chaque déploiement).
+GARDIEN_DATA_DIR = env_str("GARDIEN_DATA_DIR", "/tmp")
+GARDIEN_CHECKS_FILE = env_str("GARDIEN_CHECKS_FILE", os.path.join(GARDIEN_DATA_DIR, "gardien_verifications.json"))
+_gardien_checks: "deque[Dict[str, Any]]" = deque(gardien_sim.load(GARDIEN_CHECKS_FILE) or [], maxlen=200)
 _gardien_clock_started = False
 
 
@@ -678,7 +683,7 @@ def _gardien_refresh() -> Dict[str, Any]:
 # --- Étape 3 : portefeuille SIMULÉ du gardien (jamais d'ordre réel, même si DRY_RUN=false) ---
 GARDIEN_CAPITAL_EUR = max(0.0, env_float("GARDIEN_CAPITAL_EUR", 100.0))  # enveloppe ORION (simulée)
 GARDIEN_FEE_PCT = env_float("GARDIEN_FEE_PCT", 0.004)  # ordre limit Kraken Pro palier 1 (maker 0,40 %)
-GARDIEN_STATE_FILE = env_str("GARDIEN_STATE_FILE", "/tmp/gardien_portefeuille.json")
+GARDIEN_STATE_FILE = env_str("GARDIEN_STATE_FILE", os.path.join(GARDIEN_DATA_DIR, "gardien_portefeuille.json"))
 _gardien_pf_lock = threading.Lock()
 
 
@@ -724,7 +729,18 @@ def _gardien_tick() -> Dict[str, Any]:
         entry["erreur"] = str(e)[:200]
         log.warning("[GARDIEN] vérification impossible : %s", e)
     _gardien_checks.append(entry)
+    try:
+        gardien_sim.save(GARDIEN_CHECKS_FILE, list(_gardien_checks))
+    except Exception as e:
+        log.warning("[GARDIEN] journal non enregistré : %s", e)
     return entry
+
+
+def _gardien_storage() -> Dict[str, Any]:
+    durable = gardien_sim.is_durable(GARDIEN_STATE_FILE) and gardien_sim.is_durable(GARDIEN_CHECKS_FILE)
+    return {"dossier": GARDIEN_DATA_DIR, "durable": durable,
+            "explication": "survit aux redémarrages (disque persistant)" if durable
+            else "TEMPORAIRE : effacé à chaque redéploiement (régler GARDIEN_DATA_DIR sur le disque persistant)"}
 
 
 def _gardien_clock_loop():
@@ -766,7 +782,8 @@ def gardien_portefeuille():
         price = None
     out = gardien_sim.summary(pf, price)
     out["frais_par_ordre_pct"] = round(GARDIEN_FEE_PCT * 100, 2)
-    out["ordres_reels"] = "aucun (étape 3 : simulation)"
+    out["ordres_reels"] = "aucun (simulation)"
+    out["stockage"] = _gardien_storage()
     return jsonify(out), 200
 
 
@@ -784,7 +801,8 @@ def gardien_journal():
         return jsonify({"error": "journal_indisponible", "detail": str(e)}), 503
     return jsonify({
         "horloge": {"active": GARDIEN_CLOCK_ENABLED, "verification_toutes_les_sec": GARDIEN_CLOCK_SEC,
-                    "nb_verifications_depuis_demarrage": len(_gardien_checks)},
+                    "nb_verifications_enregistrees": len(_gardien_checks)},
+        "stockage": _gardien_storage(),
         "dernieres_verifications": list(_gardien_checks)[-24:][::-1],
         "derniers_jours": jours,
         "ordres": "aucun (étape 2 : horloge + journal, lecture seule)",
