@@ -6,7 +6,7 @@ import threading
 import logging
 import uuid
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from functools import lru_cache
 from typing import Any, Dict, Tuple, Optional, Callable
 from flask import Flask, request, jsonify
@@ -656,20 +656,90 @@ _gardien_lock = threading.Lock()
 GARDIEN_CACHE_SEC = env_int("GARDIEN_CACHE_SEC", 600)
 
 
+GARDIEN_CLOCK_ENABLED = env_str("GARDIEN_CLOCK_ENABLED", "true").lower() in ("1", "true", "yes")
+GARDIEN_CLOCK_SEC = max(60, env_int("GARDIEN_CLOCK_SEC", 3600))
+_gardien_checks: "deque[Dict[str, Any]]" = deque(maxlen=200)  # vérifications de l'horloge (depuis le démarrage)
+_gardien_clock_started = False
+
+
+def _gardien_refresh() -> Dict[str, Any]:
+    """Recalcule le signal à partir des bougies Kraken et met à jour le cache. Aucun ordre."""
+    candles = gardien.fetch_daily_candles("XBTEUR")
+    data = gardien.compute_signal(candles)
+    data["calcule_a_utc"] = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
+    with _gardien_lock:
+        _gardien_cache.update({"ts": time.time(), "data": data, "candles": candles})
+    return data
+
+
+def _gardien_tick() -> Dict[str, Any]:
+    """Une vérification de l'horloge : calcule, compare à la précédente, journalise."""
+    previous = _gardien_checks[-1] if _gardien_checks else None
+    entry: Dict[str, Any] = {"verifie_a_utc": time.strftime("%Y-%m-%d %H:%M", time.gmtime())}
+    try:
+        data = _gardien_refresh()
+        entry.update({"jour_cloture_utc": data["jour_cloture_utc"], "position": data["position_theorique"],
+                      "cloture": data["cloture"]})
+        if previous and previous.get("position") and previous["position"] != entry["position"]:
+            entry["evenement"] = f"CHANGEMENT : {previous['position']} -> {entry['position']}"
+            log.warning("[GARDIEN] %s (jour %s)", entry["evenement"], entry["jour_cloture_utc"])
+        elif not previous or previous.get("jour_cloture_utc") != entry["jour_cloture_utc"]:
+            entry["evenement"] = "nouveau jour clôturé"
+            log.info("[GARDIEN] jour %s : %s (clôture %.0f)", entry["jour_cloture_utc"], entry["position"], entry["cloture"])
+    except Exception as e:  # Kraken indisponible : on réessaiera à la prochaine vérification
+        entry["erreur"] = str(e)[:200]
+        log.warning("[GARDIEN] vérification impossible : %s", e)
+    _gardien_checks.append(entry)
+    return entry
+
+
+def _gardien_clock_loop():
+    while True:
+        _gardien_tick()
+        time.sleep(GARDIEN_CLOCK_SEC)
+
+
+def _start_gardien_clock():
+    global _gardien_clock_started
+    if GARDIEN_CLOCK_ENABLED and not _gardien_clock_started:
+        _gardien_clock_started = True
+        threading.Thread(target=_gardien_clock_loop, name="gardien-clock", daemon=True).start()
+        log.info("[GARDIEN] horloge démarrée (toutes les %s s)", GARDIEN_CLOCK_SEC)
+
+
 @app.get("/gardien/signal")
 def gardien_signal():
     """Position théorique du gardien journalier. Ne passe AUCUN ordre."""
     with _gardien_lock:
-        if _gardien_cache["data"] and time.time() - _gardien_cache["ts"] < GARDIEN_CACHE_SEC:
+        fresh = _gardien_cache["data"] and time.time() - _gardien_cache["ts"] < GARDIEN_CACHE_SEC
+        if fresh:
             return jsonify(_gardien_cache["data"]), 200
-        try:
-            data = gardien.compute_signal(gardien.fetch_daily_candles("XBTEUR"))
-        except Exception as e:
-            log.warning("[GARDIEN] signal indisponible: %s", e)
-            return jsonify({"error": "signal_indisponible", "detail": str(e)}), 503
-        data["calcule_a_utc"] = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
-        _gardien_cache.update({"ts": time.time(), "data": data})
-        return jsonify(data), 200
+    try:
+        return jsonify(_gardien_refresh()), 200
+    except Exception as e:
+        log.warning("[GARDIEN] signal indisponible: %s", e)
+        return jsonify({"error": "signal_indisponible", "detail": str(e)}), 503
+
+
+@app.get("/gardien/journal")
+def gardien_journal():
+    """Décisions des 30 derniers jours + vérifications récentes de l'horloge. Ne passe AUCUN ordre."""
+    try:
+        with _gardien_lock:
+            candles = _gardien_cache.get("candles") if time.time() - _gardien_cache["ts"] < GARDIEN_CACHE_SEC else None
+        if not candles:
+            _gardien_refresh()
+            candles = _gardien_cache["candles"]
+        jours = gardien.daily_history(candles, 30)
+    except Exception as e:
+        return jsonify({"error": "journal_indisponible", "detail": str(e)}), 503
+    return jsonify({
+        "horloge": {"active": GARDIEN_CLOCK_ENABLED, "verification_toutes_les_sec": GARDIEN_CLOCK_SEC,
+                    "nb_verifications_depuis_demarrage": len(_gardien_checks)},
+        "dernieres_verifications": list(_gardien_checks)[-24:][::-1],
+        "derniers_jours": jours,
+        "ordres": "aucun (étape 2 : horloge + journal, lecture seule)",
+    }), 200
 
 
 @app.get("/debug/balances")
@@ -1053,6 +1123,7 @@ def webhook():
 
 # ===== Boot =====
 _load_state()
+_start_gardien_clock()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT","10000"))

@@ -51,23 +51,44 @@ def fetch_daily_candles(pair: str = "XBTEUR", now: Optional[float] = None,
     return [c for c in candles if c[0] + DAY_SEC <= now]
 
 
-def compute_signal(candles: List[Candle]) -> dict:
-    """Rejoue la règle sur tout l'historique et renvoie l'état du gardien au dernier jour clôturé."""
+def _replay(candles: List[Candle]):
+    """Rejoue la règle jour par jour. Renvoie les EMA et la position après chaque clôture."""
     if len(candles) < MIN_CANDLES:
         raise ValueError(f"historique insuffisant ({len(candles)} bougies, {MIN_CANDLES} nécessaires)")
     closes = [c for _, c in candles]
     ef, es, et = ema(closes, FAST), ema(closes, SLOW), ema(closes, TREND)
-
+    positions: List[bool] = []
     in_pos = False
     last_change: Optional[int] = None
     for i, (ts, close) in enumerate(candles):
-        if i < TREND:  # période de chauffe : l'EMA200 n'est pas encore significative
-            continue
-        if not in_pos and ef[i] > es[i] and close > et[i]:
-            in_pos, last_change = True, ts
-        elif in_pos and ef[i] < es[i]:
-            in_pos, last_change = False, ts
+        if i >= TREND:  # avant : période de chauffe de l'EMA200
+            if not in_pos and ef[i] > es[i] and close > et[i]:
+                in_pos, last_change = True, ts
+            elif in_pos and ef[i] < es[i]:
+                in_pos, last_change = False, ts
+        positions.append(in_pos)
+    return ef, es, et, positions, last_change
 
+
+def daily_history(candles: List[Candle], days: int = 30) -> List[dict]:
+    """Journal des décisions des derniers jours (du plus récent au plus ancien)."""
+    ef, es, et, pos, _ = _replay(candles)
+    out = []
+    for i in range(len(candles) - 1, max(len(candles) - 1 - days, 0), -1):
+        ts, close = candles[i]
+        out.append({
+            "jour_cloture_utc": time.strftime("%Y-%m-%d", time.gmtime(ts)),
+            "cloture": round(close, 2), "ema20": round(ef[i], 2), "ema50": round(es[i], 2), "ema200": round(et[i], 2),
+            "position": "ACHETEUR (BTC)" if pos[i] else "EN EUROS",
+            "changement": pos[i] != pos[i - 1],
+        })
+    return out
+
+
+def compute_signal(candles: List[Candle]) -> dict:
+    """Rejoue la règle sur tout l'historique et renvoie l'état du gardien au dernier jour clôturé."""
+    ef, es, et, positions, last_change = _replay(candles)
+    in_pos = positions[-1]
     ts, close = candles[-1]
     f, s, t = ef[-1], es[-1], et[-1]
     buy_ok = f > s and close > t
