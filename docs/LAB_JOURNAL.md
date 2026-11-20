@@ -128,3 +128,30 @@ Rapport complet : `lab/results/EXP03_gardien_journalier.md` · Script : `lab/exp
 
 - Peu de trades (6 à 10 sur la période de contrôle). Robustesse = plateau de réglages + 2 marchés.
 - Le passé ne garantit pas l'avenir : prévoir une perte maximale possible **d'au moins -50 %** de l'enveloppe.
+
+---
+
+## EXP04a — 20/11/2026 — Le taux de financement (levier des traders) aide-t-il le gardien ?
+
+Rapport : `lab/results/EXP04a_funding.md` · Script : `lab/exp04a_funding.py` · Données : `lab/data_funding.py`
+
+**Hypothèses fixées avant de regarder les résultats** (seuils = quantiles 80 % / 90 % de 2020-2023 uniquement) :
+H1 ne pas acheter quand le levier est extrême · H2 investir 50 % quand il est élevé · H3 vendre quand il est extrême.
+
+### Ce que disent les données
+
+- **BTC : aucune variante ne bat le gardien seul** sur la période de contrôle (0 à 31 % des réglages), à 0,80 % comme à 0,40 % de frais.
+  Le dosage à 50 % réduit un peu la perte maximale (-32 % au lieu de -35 %) mais coûte beaucoup de rendement (+41 % au lieu de +58 %).
+- **ETH : H1 (veto q80) bat le gardien en contrôle (100 % des réglages) mais fait pire en étude (0 %)** → résultat incohérent = hasard. Rejeté.
+- H3 (vendre sur levier extrême) est la pire : en tendance haussière, l'euphorie dure souvent plus longtemps qu'on ne le croit.
+
+### Leçons
+
+- **Rejeté : le taux de financement n'apporte rien au gardien journalier.** La tendance contient déjà l'information.
+- Un indicateur « suivi par les pros » n'est pas automatiquement utile : c'est exactement pourquoi tout passe par le laboratoire.
+- Méthode validée : hypothèses écrites avant, seuils calculés sur la seule période d'étude, critère de cohérence étude + contrôle + 2 marchés.
+
+### Suite (EXP04b)
+
+Indice Peur & Avidité, positions COT (CFTC), volatilité implicite (Deribit), flux ETF — nécessite d'autoriser de nouvelles sources
+de données dans l'environnement (accord du propriétaire). Puis indicateurs AEGIS (Bollinger, Heikin Ashi) comme aide à l'entrée.

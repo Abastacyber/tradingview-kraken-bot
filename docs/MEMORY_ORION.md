@@ -68,6 +68,7 @@ Deux circuits distincts :
 - **EXP03 (11/11) : règle candidate « ORION GARDIEN v1 »** — acheteur tant que EMA20>EMA50 et prix>EMA200 (journalier),
   vente quand EMA20<EMA50, stop de protection chez Kraken. Confirmée sur ETH/EUR (+40 % quand ETH fait -5 %).
   Au 10/11/2026 : conditions NON réunies (le gardien serait en euros).
+- **EXP04a (20/11) : le taux de financement (levier) n'améliore PAS le gardien** (rejeté, voir LAB_JOURNAL).
 - **Frais Kraken : hausse du 9 juillet 2026 quasi confirmée** (veille du 15/11, pages d'aide Kraken via moteur de recherche) :
   palier de départ **0,40 % maker / 0,80 % taker**. Hypothèse de travail désormais : 0,80 % par ordre market.
   La règle gardien journalier reste gagnante à 0,80 % (EXP02/EXP03). À confirmer sur le compte du propriétaire.
@@ -100,6 +101,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 ## 6. Journal des mises à jour
 
 - **11/11/2026** — Explication des rôles TradingView / Render / GitHub / Kraken (section 2bis). Point à vérifier ajouté : mise en veille du plan gratuit Render.
+- **20/11/2026 (2)** — EXP04a : taux de financement testé comme veto / dosage / sortie → rejeté (n'apporte rien).
+  Moteur du labo : investissement partiel possible (paramètre size).
 - **20/11/2026** — Option 1 décidée. Gardien étape 1 : `gardien.py` + `/gardien/signal` (lecture seule, 16 tests dont parité labo).
   Signal au 19/11 : EN EUROS (clôture 56 468 €, sous EMA20/50/200), dernier changement le 06/11.
 - **18/11/2026** — Veille du 15/11 récupérée (`docs/veille/VEILLE_2026-11-15.md`) : BTC -12 % en 4 jours (58 293 € le 14/11),

@@ -43,3 +43,13 @@ def test_trailing_applies_from_next_bar():
     r = E.run(df, ent, None, E.Exits(stop_pct=0.05, trail_activate_pct=0.005, trail_gap_pct=0.01), E.Costs(0, 0, 0))
     t = r.trades[0]
     assert t.reason == "trail" and t.raw_exit == pytest.approx(105 * 0.99)
+
+
+def test_partial_size_keeps_rest_in_cash():
+    # +10 % sur une position investie à 50 % -> +5 % sur le capital (sans frais)
+    df = bars([(100, 100, 100, 100), (100, 110, 100, 110), (110, 110, 110, 110)])
+    ent = pd.Series([True, False, False], index=df.index)
+    ex = pd.Series([False, True, False], index=df.index)
+    size = pd.Series([0.5, 1.0, 1.0], index=df.index)
+    r = E.run(df, ent, ex, E.Exits(), E.Costs(0, 0, 0), size=size)
+    assert r.equity.iloc[-1] == pytest.approx(1.05)

@@ -76,7 +76,10 @@ def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
 
 
 def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = None,
-        exits: Exits = Exits(), costs: Costs = Costs(), atr_n: int = 14) -> Result:
+        exits: Exits = Exits(), costs: Costs = Costs(), atr_n: int = 14,
+        size: Optional[pd.Series] = None) -> Result:
+    """size (optionnel) : fraction du capital investie à chaque entrée (0 à 1), lue sur la bougie
+    du signal. Le reste reste en euros. Par défaut : 100 % investi."""
     o = df["open"].to_numpy(); h = df["high"].to_numpy()
     l = df["low"].to_numpy(); c = df["close"].to_numpy()
     idx = df.index
@@ -84,6 +87,9 @@ def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = N
     ent = entries.reindex(idx).fillna(False).to_numpy(dtype=bool)
     exs = (exits_sig.reindex(idx).fillna(False).to_numpy(dtype=bool)
            if exits_sig is not None else np.zeros(len(df), dtype=bool))
+    sz = (size.reindex(idx).fillna(1.0).clip(0.0, 1.0).to_numpy(dtype=float)
+          if size is not None else np.ones(len(df)))
+    rest = 0.0; entry_frac = 1.0
 
     slip, fe, fx = costs.slippage, costs.fee_entry, costs.fee_exit
     trades: list[Trade] = []
@@ -94,10 +100,10 @@ def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = N
     in_market = 0
 
     def close_trade(i, raw_px, reason):
-        nonlocal in_pos, cash, qty
+        nonlocal in_pos, cash, qty, rest
         px = raw_px * (1 - slip)
         proceeds = qty * px * (1 - fx)
-        cash = proceeds
+        cash = proceeds + rest; rest = 0.0
         t = Trade(idx[entry_i], idx[i], paid, px, raw_entry, raw_px, i - entry_i, reason)
         t.gross = raw_px / raw_entry - 1
         t.net = (px * (1 - fx)) / (paid * (1 + fe)) - 1
@@ -111,7 +117,9 @@ def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = N
         if not in_pos and pending_entry:
             pending_entry = False
             raw_entry = o[i]; paid = raw_entry * (1 + slip)
-            qty = cash / (paid * (1 + fe))
+            invest = cash * entry_frac
+            rest = cash - invest
+            qty = invest / (paid * (1 + fe))
             in_pos = True; entry_i = i; maxp = raw_entry; trail_on = False; be_done = False
             stops = []
             if exits.stop_pct: stops.append(raw_entry * (1 - exits.stop_pct))
@@ -145,12 +153,12 @@ def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = N
                     pending_exit = True
 
         # 3) nouveau signal d'entrée (exécuté à la prochaine ouverture)
-        if not in_pos and ent[i]:
-            pending_entry = True
+        if not in_pos and ent[i] and not pending_entry:
+            pending_entry = True; entry_frac = sz[i]
 
         if in_pos:
             in_market += 1
-            equity[i] = qty * c[i] * (1 - fx)
+            equity[i] = rest + qty * c[i] * (1 - fx)
         else:
             equity[i] = cash
 
