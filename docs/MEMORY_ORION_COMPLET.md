@@ -107,7 +107,7 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 - **Entre les deux :** on garde la position.
 - **Pas d'achat de rattrapage :** au démarrage, ou si la position a été manquée, on n'achète que si les deux conditions d'achat sont réunies ce jour-là.
 - **Ordres :** **limit** (frais 0,40 %) plutôt qu'au marché (0,80 %).
-- **Stop de protection** posé chez Kraken, environ 3 ATR. C'est une assurance contre un krach brutal ou une panne, pas l'outil de sortie normal. Il sera fait à l'étape 5.
+- **Stop de protection** posé chez Kraken : proposition EXP06 = suiveur 12 ATR (décision du propriétaire attendue). C'est une assurance contre un krach brutal ou une panne, pas l'outil de sortie normal. Il sera fait à l'étape 5.
 - **Enveloppe :** le bot n'utilise que le montant qui lui est alloué, jamais tout le solde Kraken.
 - **Rythme attendu :** environ 2 à 5 allers-retours par an. Le bot passe de longues périodes en euros : c'est voulu, il protège le capital pendant les chutes.
 
@@ -148,6 +148,7 @@ Le palier dépend du volume échangé sur 30 jours **ou** des avoirs chez Kraken
 | EXP04a (20/11) | Le taux de financement (levier des traders) aide-t-il ? | **Non.** Rejeté |
 | EXP04b (20/11) | Autres marchés ? Indicateurs « institutionnels » ? | Robuste sur **BTC, ETH, BNB**. Pas sur SOL, ADA, XRP, DOGE, ni **EUR/USD**, ni **l'or**. Peur & Avidité et volatilité implicite sont inutiles. Les positions COT des fonds réduisent la pire baisse mais coûtent du rendement : gardées en réserve |
 | EXP05 (20/11) | Diversifier ? | BTC + ETH n'aide pas (corrélation 0,81). **BTC + ETH + BNB aide un peu** : pire baisse de -30 % au lieu de -34 %. Les ordres limit rapportent environ +12 points par rapport aux ordres au marché |
+| EXP06 (20/11) | Quel stop de protection ? | Un stop proche coûte (3 ATR : +57 % au lieu de +68 %). -20 % fixe échoue sur ETH. **Suiveur 12 ATR** : coût nul sur BTC et ETH, pire perte en panne -26 % au lieu de -33 % (bénéfice fragile, 1-2 krachs). Verrou anti-rachat rejeté |
 
 ### Résultats de référence (contrôle 2024 → octobre 2026, BTC, gardien « état »)
 

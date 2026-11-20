@@ -26,6 +26,8 @@ class Costs:
     fee_entry: float = 0.0080   # 0,80 % (taker Kraken Pro palier 1, grille officielle vérifiée le 20/11/2026)
     fee_exit: float = 0.0080
     slippage: float = 0.0005    # 0,05 % par ordre market
+    fee_stop: Optional[float] = None   # frais d'une sortie par stop (ordre stop Kraken = taker). None → fee_exit
+    slip_stop: Optional[float] = None  # glissement d'une sortie par stop (marché qui chute). None → slippage
 
     @property
     def round_trip(self) -> float:
@@ -43,6 +45,8 @@ class Exits:
     breakeven_at_r: Optional[float] = None  # stop remonté au break-even NET à +k R
     max_bars: Optional[int] = None          # sortie au bout de N bougies
     use_signal_exit: bool = True            # sortie sur signal de la stratégie
+    no_reentry_after_stop: bool = False     # après un stop : pas de rachat tant que le signal de sortie
+                                            # n'est pas réapparu (évite de racheter le lendemain du stop)
 
 
 @dataclass
@@ -99,16 +103,23 @@ def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = N
     trail_on = False; be_done = False; qty = 0.0; init_stop = 0.0
     in_market = 0
 
+    blocked = False  # rachat interdit après un stop (option no_reentry_after_stop)
+
     def close_trade(i, raw_px, reason):
-        nonlocal in_pos, cash, qty, rest
-        px = raw_px * (1 - slip)
-        proceeds = qty * px * (1 - fx)
+        nonlocal in_pos, cash, qty, rest, blocked
+        is_stop = reason in ("stop", "stop_gap", "trail")
+        s_ = (costs.slip_stop if costs.slip_stop is not None else slip) if is_stop else slip
+        f_ = (costs.fee_stop if costs.fee_stop is not None else fx) if is_stop else fx
+        px = raw_px * (1 - s_)
+        proceeds = qty * px * (1 - f_)
         cash = proceeds + rest; rest = 0.0
         t = Trade(idx[entry_i], idx[i], paid, px, raw_entry, raw_px, i - entry_i, reason)
         t.gross = raw_px / raw_entry - 1
-        t.net = (px * (1 - fx)) / (paid * (1 + fe)) - 1
+        t.net = (px * (1 - f_)) / (paid * (1 + fe)) - 1
         trades.append(t)
         in_pos = False; qty = 0.0
+        if is_stop and exits.no_reentry_after_stop:
+            blocked = True
 
     for i in range(len(df)):
         # 1) ordres programmés à l'ouverture
@@ -153,7 +164,9 @@ def run(df: pd.DataFrame, entries: pd.Series, exits_sig: Optional[pd.Series] = N
                     pending_exit = True
 
         # 3) nouveau signal d'entrée (exécuté à la prochaine ouverture)
-        if not in_pos and ent[i] and not pending_entry:
+        if blocked and exs[i]:
+            blocked = False  # le signal s'est remis à zéro : le prochain achat est de nouveau permis
+        if not in_pos and ent[i] and not pending_entry and not blocked:
             pending_entry = True; entry_frac = sz[i]
 
         if in_pos:

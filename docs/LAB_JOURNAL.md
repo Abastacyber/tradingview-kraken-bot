@@ -221,3 +221,48 @@ rendement ÷ perte max que BTC seul, sur l'étude ET le contrôle, pour la major
 - Gardien v1 = **BTC seul** (le plus simple et le plus solide). Panier BTC + ETH + BNB = **variante v2 candidate**,
   une fois le gardien BTC validé en réel.
 - Prudence sur BNB : c'est le jeton de la plateforme Binance → risque propre à une seule entreprise.
+
+---
+
+## EXP06 — 20/11/2026 — Calibrer le stop de protection du gardien (avant l'étape 5)
+
+Rapport : `lab/results/EXP06_stop_protection.md` · Script : `lab/exp06_stop_protection.py`
+Moteur : ajout des frais/glissement propres aux sorties par stop (`Costs.fee_stop`, `Costs.slip_stop`) et du verrou
+« pas de rachat après un stop tant que le signal ne s'est pas remis à zéro » (`Exits.no_reentry_after_stop`), avec 2 tests.
+
+Hypothèses écrites avant : achats/ventes sur signal en ordres limit 0,40 % + 0,05 % ; sortie par stop = taker 0,80 %
++ 0,50 % de glissement. Scénario PANNE : la vente sur signal arrive 7 jours en retard (serveur arrêté), seul le stop chez Kraken agit.
+Critère fixé avant : (a) ≥ 90 % de réglages gagnants sur 2 périodes, (b) ≤ 3 points de rendement médian perdus en étude
+ET en contrôle, (c) ≤ 1 déclenchement/an ; parmi les acceptables, la meilleure « pire perte d'un trade » en PANNE ; ETH ne doit pas contredire.
+
+### Ce que disent les données (BTC/EUR, contrôle 2024-2026, médianes sur 16 réglages)
+
+| Stop | Contrôle | Déclenchements/an | Pire trade en PANNE | ETH contrôle (sans stop : +40 %) |
+|---|---|---|---|---|
+| aucun | +68 % | 0 | -33 % | +40 % |
+| initial 3 ATR | +57 % | 0,9 | -16 % | +32 % |
+| initial -15 % | +66 % | 0,2 | -17 % | +26 % ❌ |
+| initial -20 % | +68 % | 0 | -21 % | +28 % ❌ |
+| initial 8 ATR | +68 % | 0 | -38 % | +40 % |
+| suiveur 12 ATR | +68 % | 0 | -26 % | +40 % ✅ |
+| suiveur -20 % / -25 % du plus haut | +61 % / +67 % (étude divisée par 2) | 1,9 / 0,9 | -20 % / -25 % | +6 % / +4 % ❌ |
+
+1. **Confirmé : un stop qui se déclenche en temps normal COÛTE** (3 ATR, -15 %, suiveurs en %). Le gardien sort déjà
+   sur signal ; un stop proche ne fait qu'ajouter des allers-retours taxés.
+2. **Le verrou anti-rachat n'aide pas de façon fiable** (aide BTC avec 3 ATR, nuit fortement sur ETH). ❌ Non adopté.
+3. **Le critère désigne « initial -20 % » sur BTC, mais ETH le contredit** (contrôle +28 % au lieu de +40 %) : un seuil fixe
+   en % ne s'adapte pas à un marché plus agité. → choix rejeté par la règle de confirmation.
+4. **Le stop suiveur 12 ATR passe le critère sur BTC ET ETH** : il ne s'est déclenché quasiment jamais en 7 ans
+   (coût nul), et dans le scénario PANNE il ramène la pire perte d'un trade BTC de -33 % à -26 %.
+5. **Limite importante :** le gain en PANNE n'est pas stable selon le réglage (10 ATR : -17 % ; 12 : -26 % ; 14 : -34 % ;
+   16 : -43 %). Il dépend de 1 ou 2 krachs historiques : **les données ne permettent pas de calibrer finement une
+   assurance anti-panne**. Ce qui est solide : un stop très large ne coûte rien ; un stop proche coûte.
+   12 ATR ≈ 35 à 50 % sous le plus haut selon la volatilité (ATR BTC ≈ 4 % du prix par jour).
+
+### Décision proposée (au propriétaire)
+
+- Stop de protection du gardien v1 = **suiveur 12 ATR** (plus haut depuis l'achat − 12 × ATR14 journalier),
+  remonté une fois par jour après la clôture, jamais redescendu, posé chez Kraken. **Une assurance contre la panne
+  prolongée ou le krach extrême, pas un outil de sortie.** Pas de verrou anti-rachat.
+- Alternative plus simple : stop initial fixe (posé une fois à l'achat, jamais modifié) — mais aucun seuil fixe testé
+  n'est à la fois gratuit et utile sur les deux marchés.

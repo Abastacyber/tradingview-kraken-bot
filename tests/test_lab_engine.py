@@ -53,3 +53,25 @@ def test_partial_size_keeps_rest_in_cash():
     size = pd.Series([0.5, 1.0, 1.0], index=df.index)
     r = E.run(df, ent, ex, E.Exits(), E.Costs(0, 0, 0), size=size)
     assert r.equity.iloc[-1] == pytest.approx(1.05)
+
+
+def test_stop_exit_uses_stop_fee_and_slippage():
+    df = bars([(100, 100, 100, 100), (100, 100, 100, 100), (100, 100, 80, 85), (85, 85, 85, 85)])
+    ent = pd.Series([True, False, False, False], index=df.index)
+    c = E.Costs(0.004, 0.004, 0.0, fee_stop=0.008, slip_stop=0.01)
+    r = E.run(df, ent, None, E.Exits(stop_pct=0.10), c)
+    t = r.trades[0]
+    assert t.reason == "stop" and t.raw_exit == pytest.approx(90)
+    assert t.net == pytest.approx(90 * 0.99 * 0.992 / (100 * 1.004) - 1)
+
+
+def test_no_reentry_after_stop_until_exit_signal():
+    # entrée « état » vraie tout le temps ; stop touché bougie 2 ; signal de sortie bougie 4 seulement
+    rows = [(100, 100, 100, 100)] * 2 + [(100, 100, 80, 85)] + [(85, 86, 84, 85)] * 5
+    df = bars(rows)
+    ent = pd.Series(True, index=df.index)
+    ex = pd.Series([False] * 4 + [True] + [False] * 3, index=df.index)
+    free = E.run(df, ent, ex, E.Exits(stop_pct=0.10, use_signal_exit=False), E.Costs(0, 0, 0))
+    lock = E.run(df, ent, ex, E.Exits(stop_pct=0.10, use_signal_exit=False, no_reentry_after_stop=True), E.Costs(0, 0, 0))
+    assert free.trades[1].entry_time == df.index[3]   # sans verrou : rachat dès le lendemain du stop
+    assert lock.trades[1].entry_time == df.index[5]   # avec verrou : rachat après le signal de sortie (bougie 4)

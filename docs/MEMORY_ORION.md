@@ -76,6 +76,9 @@ Deux circuits distincts :
 - **EXP03 (11/11) : règle candidate « ORION GARDIEN v1 »** — acheteur tant que EMA20>EMA50 et prix>EMA200 (journalier),
   vente quand EMA20<EMA50, stop de protection chez Kraken. Confirmée sur ETH/EUR (+40 % quand ETH fait -5 %).
   Au 10/11/2026 : conditions NON réunies (le gardien serait en euros).
+- **EXP06 (20/11) : stop de protection** — un stop proche (3 ATR, -15 %) coûte du rendement ; le seuil -20 % fixe échoue sur ETH ;
+  **suiveur 12 ATR** : coût nul sur BTC et ETH, limite un peu la pire perte en cas de panne serveur (-26 % au lieu de -33 %), mais
+  ce bénéfice dépend de 1-2 krachs (non calibrable finement). Verrou anti-rachat : rejeté. Décision du propriétaire attendue.
 - **EXP05 (20/11) : diversification** — BTC+ETH n'aide pas (trop corrélés) ; BTC+ETH+BNB aide un peu (perte max -30 % au lieu de -34 %).
   Gardien v1 = BTC seul ; panier BTC+ETH+BNB = variante v2 candidate. Ordres limit : +12 points vs market sur 2024-2026.
 - **EXP04b (20/11) : le gardien est robuste sur BTC, ETH et BNB ; pas sur SOL/ADA/XRP/DOGE, ni EUR/USD, ni l'or.**
@@ -117,6 +120,7 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **20/11/2026 (12)** — EXP06 stop de protection (voir LAB_JOURNAL) : proposition suiveur 12 ATR, décision du propriétaire attendue avant l'étape 5.
 - **20/11/2026 (11)** — Contrôle du propriétaire : `/gardien/journal` affichait 0 vérification alors que l'horloge tourne. Cause probable : l'horloge tourne dans un autre processus gunicorn que celui qui répond aux pages (mémoire vive non partagée). Correctif : la page relit le fichier du disque. 35 tests (34 PASS, 1 ignoré).
 - **20/11/2026 (10)** — **Étape 4 validée en ligne** : disque `/var/data` ajouté, `/health` → `gardien_stockage_durable: true`, `creds_ok: true`. Prochaine étape Claude : étape 5 (stop de protection chez Kraken).
 - **20/11/2026 (9)** — Réglages Render relus (export `.env` partagé → clés renouvelées : nouvelle clé Kraken « THE LAST ONE STANDING »). GO du propriétaire pour mettre l'étape 4 en ligne (fusion dans `feature/orion-protocol-v1`). Disque `/var/data` en cours d'ajout.
