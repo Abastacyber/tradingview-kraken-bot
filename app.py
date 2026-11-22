@@ -9,7 +9,7 @@ import uuid
 from collections import OrderedDict, deque
 from functools import lru_cache
 from typing import Any, Dict, List, Tuple, Optional, Callable
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import ccxt
 
 import gardien
@@ -852,6 +852,13 @@ def gardien_essai():
     out["donnees"] = "historique BTC/EUR 2020-2026 fourni avec le bot (Binance) + bougies Kraken récentes"
     out["ordres"] = "aucun (essai sur le passé)"
     return jsonify(out), 200
+
+
+@app.get("/gardien/essai/page")
+def gardien_essai_page():
+    """Page lisible du mode d'essai (résumé, graphique, opérations). Elle interroge /gardien/essai."""
+    return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages", "essai.html"),
+                     mimetype="text/html")
 
 
 @app.get("/gardien/journal")

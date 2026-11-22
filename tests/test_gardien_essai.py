@@ -76,3 +76,13 @@ def test_merge_history_prefers_kraken_for_recent_days():
     live = [(86400, 9, 9, 9, 9.0), (172800, 9, 9, 9, 9.5)]
     assert G.merge_history(h, live) == [h[0]] + live
     assert G.merge_history(h, []) == h
+
+
+def test_essai_page_is_served(monkeypatch, tmp_path):
+    monkeypatch.setenv("STATE_FILE", str(tmp_path / "s.json"))
+    sys.modules.pop("app", None)
+    import app as A
+    r = A.app.test_client().get("/gardien/essai/page")
+    assert r.status_code == 200 and r.mimetype == "text/html"
+    html = r.get_data(as_text=True)
+    assert "Mode d'essai" in html and "/gardien/essai?" in html

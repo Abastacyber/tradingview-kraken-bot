@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORION — Mode d'essai</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1b1f24; --muted: #5d6673; --line: #dde1e6;
+    --guard: #1f6feb; --btc: #b07d12; --good: #1a7f37; --bad: #c62828; --panne: rgba(198, 40, 40, .10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --card: #171b21; --text: #e6e9ee; --muted: #9aa4b2; --line: #2a313a;
+      --guard: #58a6ff; --btc: #e3b341; --good: #3fb950; --bad: #f85149; --panne: rgba(248, 81, 73, .14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.35rem; margin: 4px 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: .92rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--muted); }
+  input { font: inherit; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
+          background: var(--bg); color: var(--text); min-width: 0; }
+  button { font: inherit; font-weight: 600; padding: 8px 12px; border: 0; border-radius: 6px;
+           background: var(--guard); color: #fff; cursor: pointer; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .presets button { background: transparent; color: var(--guard); border: 1px solid var(--line); font-weight: 500; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .kpi { border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .kpi .l { font-size: .8rem; color: var(--muted); }
+  .kpi .v { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi .c { font-size: .8rem; color: var(--muted); }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+  .sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  svg { width: 100%; height: auto; display: block; }
+  .axis { fill: var(--muted); font-size: 11px; }
+  .grid { stroke: var(--line); stroke-width: 1; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+  .note { color: var(--muted); font-size: .85rem; }
+  .err { color: var(--bad); font-weight: 600; }
+  #tip { position: fixed; pointer-events: none; background: var(--card); border: 1px solid var(--line);
+         border-radius: 6px; padding: 6px 8px; font-size: .8rem; display: none; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ORION — Mode d'essai</h1>
+  <p class="sub">Le vrai code du gardien, rejoué sur une période passée. Portefeuille d'essai séparé : aucun ordre, rien n'est modifié.</p>
+
+  <div class="card">
+    <form id="f">
+      <label>Début <input type="date" name="debut" required></label>
+      <label>Fin (vide = aujourd'hui) <input type="date" name="fin"></label>
+      <label>Panne : début (facultatif) <input type="date" name="panne_debut"></label>
+      <label>Panne : nombre de jours <input type="number" name="panne_jours" min="0" max="60" placeholder="7"></label>
+      <label>Stop (× ATR) <input type="number" name="stop_atr" min="1" max="50" step="0.5" placeholder="12"></label>
+      <label>Capital (€) <input type="number" name="capital" min="1" step="1" placeholder="100"></label>
+      <button type="submit">Lancer l'essai</button>
+    </form>
+    <div class="presets">
+      <button data-p="debut=2021-04-01&fin=2021-08-01">Krach de mai 2021</button>
+      <button data-p="debut=2021-04-01&fin=2021-08-01&panne_debut=2021-05-10&panne_jours=7">Mai 2021 + panne 7 j</button>
+      <button data-p="debut=2022-01-01&fin=2022-12-31">Année 2022 (BTC −63 %)</button>
+      <button data-p="debut=2024-01-01">2024 → aujourd'hui</button>
+    </div>
+  </div>
+
+  <div id="out"></div>
+  <div id="tip"></div>
+</main>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const eur = v => v == null ? "—" : v.toLocaleString("fr-FR", { maximumFractionDigits: 2 }) + " €";
+const pct = v => v == null ? "—" : (v > 0 ? "+" : "") + v.toLocaleString("fr-FR", { maximumFractionDigits: 2 }) + " %";
+const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+const el = (tag, attrs = {}, text) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  return e;
+};
+const NS = "http://www.w3.org/2000/svg";
+const sv = (tag, attrs = {}) => {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+};
+
+function fillForm(params) {
+  const p = new URLSearchParams(params);
+  for (const inp of $("#f").elements) if (inp.name) inp.value = p.get(inp.name) || "";
+}
+
+async function run(params) {
+  const out = $("#out");
+  out.textContent = "";
+  out.append(el("p", { class: "note" }, "Calcul en cours…"));
+  history.replaceState(null, "", "?" + params);
+  let data;
+  try {
+    const r = await fetch("/gardien/essai?" + params);
+    data = await r.json();
+    if (!r.ok) throw new Error(data.detail || data.error || ("erreur " + r.status));
+  } catch (e) {
+    out.textContent = "";
+    out.append(el("p", { class: "err" }, "Essai impossible : " + e.message));
+    return;
+  }
+  out.textContent = "";
+  render(out, data);
+}
+
+function kpi(label, value, sub, c) {
+  const d = el("div", { class: "kpi" });
+  d.append(el("div", { class: "l" }, label), el("div", { class: "v " + (c || "") }, value));
+  if (sub) d.append(el("div", { class: "c" }, sub));
+  return d;
+}
+
+function render(out, d) {
+  const r = d.resultat, bh = d.comparaison_acheter_garder;
+  const head = el("div", { class: "card" });
+  head.append(el("p", { class: "note" },
+    `Du ${d.periode.debut} au ${d.periode.fin} (${d.periode.jours} jours)` +
+    (d.panne_simulee ? ` · panne simulée : ${d.panne_simulee.jours} jours à partir du ${d.panne_simulee.debut}` : "")));
+  const k = el("div", { class: "kpis" });
+  k.append(
+    kpi("Résultat du gardien", pct(r.resultat_pct), `${eur(r.capital_initial_eur)} → ${eur(r.valeur_finale_eur)}`, cls(r.resultat_pct)),
+    kpi("Acheter et garder", pct(bh.resultat_pct), "même période, mêmes frais", cls(bh.resultat_pct)),
+    kpi("Pire baisse — gardien", pct(r.perte_max_pct), "du plus haut au plus bas", "neg"),
+    kpi("Pire baisse — BTC", pct(bh.perte_max_pct), "acheter et garder", "neg"),
+    kpi("Opérations", String(r.nb_operations), `frais payés : ${eur(r.frais_payes_eur)}`),
+    kpi("À la fin", r.en_position_a_la_fin ? "En BTC" : "En euros",
+        r.stop_a_la_fin ? `stop de protection : ${eur(r.stop_a_la_fin)}` : "aucun stop en place"));
+  head.append(k);
+  out.append(head);
+
+  const ch = el("div", { class: "card" });
+  const lg = el("div", { class: "legend" });
+  const item = (color, txt) => { const s = el("span"); const w = el("span", { class: "sw" }); w.style.background = color; s.append(w, document.createTextNode(txt)); return s; };
+  lg.append(item("var(--guard)", "Gardien (valeur du portefeuille)"), item("var(--btc)", "Acheter et garder"));
+  if (d.panne_simulee) lg.append(item("var(--panne)", "Serveur en panne"));
+  ch.append(el("h2", { style: "font-size:1rem;margin:0 0 8px" }, "Valeur du portefeuille (€)"), lg, chart(d));
+  ch.append(el("p", { class: "note" }, "Points : ▲ achat · ▼ vente · ✕ vente par stop. Survolez ou touchez la courbe pour le détail du jour."));
+  out.append(ch);
+
+  const ops = el("div", { class: "card" });
+  ops.append(el("h2", { style: "font-size:1rem;margin:0 0 8px" }, "Opérations simulées"));
+  if (!d.operations.length) ops.append(el("p", { class: "note" }, "Aucune opération : le gardien est resté en euros (conditions d'achat jamais réunies)."));
+  else {
+    const w = el("div", { class: "tablewrap" }), t = el("table"), hr = el("tr");
+    ["Jour du signal", "Opération", "Prix", "Montant", "Frais", "Résultat du trade"].forEach(h => hr.append(el("th", {}, h)));
+    t.append(hr);
+    for (const o of d.operations) {
+      const tr = el("tr");
+      const res = o.resultat_net_trade_pct;
+      tr.append(el("td", {}, o.jour), el("td", {}, o.type), el("td", {}, eur(o.prix)),
+                el("td", {}, eur(o.montant_eur)), el("td", {}, eur(o.frais_eur)),
+                el("td", { class: res == null ? "" : cls(res) }, res == null ? "" : pct(res)));
+      t.append(tr);
+    }
+    w.append(t); ops.append(w);
+  }
+  ops.append(el("p", { class: "note" }, d.regle));
+  out.append(ops);
+}
+
+function chart(d) {
+  // largeur réelle de l'écran : les textes restent lisibles sur téléphone
+  const W = Math.max(300, Math.min(950, ($("#out").clientWidth || 900) - 30));
+  const days = d.jours, H = W < 600 ? 240 : 320, L = 48, R = 8, T = 12, B = 28;
+  const cap = d.resultat.capital_initial_eur, c0 = days[0].cloture;
+  const g = days.map(x => x.valeur_eur);
+  const b = days.map(x => cap * x.cloture / c0);
+  const lo = Math.min(...g, ...b), hi = Math.max(...g, ...b), pad = (hi - lo) * .06 || 1;
+  const y0 = lo - pad, y1 = hi + pad, n = days.length;
+  const X = i => L + (W - L - R) * (n === 1 ? 0 : i / (n - 1));
+  const Y = v => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
+  const s = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Valeur du portefeuille du gardien comparée à acheter et garder" });
+
+  for (let i = 0; i < n; i++) if (days[i].serveur === "EN PANNE")
+    s.append(sv("rect", { x: X(i) - (W - L - R) / n / 2, y: T, width: (W - L - R) / n + .5, height: H - T - B, fill: "var(--panne)" }));
+  for (let k = 0; k <= 4; k++) {
+    const v = y0 + (y1 - y0) * k / 4, y = Y(v);
+    s.append(sv("line", { x1: L, x2: W - R, y1: y, y2: y, class: "grid" }));
+    const t = sv("text", { x: L - 6, y: y + 4, "text-anchor": "end", class: "axis" }); t.textContent = Math.round(v); s.append(t);
+  }
+  const ticks = Math.min(W < 600 ? 3 : 6, n);
+  for (let k = 0; k < ticks; k++) {
+    const i = Math.round((n - 1) * k / Math.max(ticks - 1, 1));
+    const t = sv("text", { x: X(i), y: H - 8, "text-anchor": k === 0 ? "start" : k === ticks - 1 ? "end" : "middle", class: "axis" });
+    t.textContent = days[i].jour; s.append(t);
+  }
+  const path = (arr, color) => s.append(sv("path", {
+    d: arr.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join(""),
+    fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" }));
+  path(b, "var(--btc)");
+  path(g, "var(--guard)");
+
+  const idx = Object.fromEntries(days.map((x, i) => [x.jour, i]));
+  for (const o of d.operations) {
+    let i = idx[o.jour]; if (i == null) continue;
+    const stop = o.type.includes("STOP"), buy = o.type.startsWith("ACHAT");
+    if (!stop) i = Math.min(i + 1, n - 1);  // exécuté à l'ouverture du lendemain du signal
+    const x = X(i), y = Y(g[i]), c = buy ? "var(--good)" : "var(--bad)";
+    const sh = buy ? `M${x} ${y - 9} L${x - 6} ${y + 2} L${x + 6} ${y + 2} Z`
+             : stop ? `M${x - 5} ${y - 5} L${x + 5} ${y + 5} M${x + 5} ${y - 5} L${x - 5} ${y + 5}`
+             : `M${x} ${y + 9} L${x - 6} ${y - 2} L${x + 6} ${y - 2} Z`;
+    s.append(sv("path", { d: sh, fill: stop ? "none" : c, stroke: c, "stroke-width": stop ? 2.5 : 1 }));
+  }
+
+  const cursor = sv("line", { y1: T, y2: H - B, stroke: "var(--muted)", "stroke-dasharray": "3 3", visibility: "hidden" });
+  s.append(cursor);
+  const tip = $("#tip");
+  const move = ev => {
+    const p = ev.touches ? ev.touches[0] : ev, box = s.getBoundingClientRect();
+    const vx = (p.clientX - box.left) * W / box.width;
+    const i = Math.max(0, Math.min(n - 1, Math.round((vx - L) / (W - L - R) * (n - 1))));
+    const x = days[i];
+    cursor.setAttribute("x1", X(i)); cursor.setAttribute("x2", X(i)); cursor.setAttribute("visibility", "visible");
+    tip.textContent = "";
+    [x.jour, `BTC : ${eur(x.cloture)}`, `Gardien : ${eur(x.valeur_eur)} (${x.en_position ? "en BTC" : "en euros"})`,
+     `Acheter et garder : ${eur(Math.round(b[i] * 100) / 100)}`, x.stop ? `Stop : ${eur(x.stop)}` : null,
+     x.serveur === "EN PANNE" ? "Serveur en panne" : null].filter(Boolean).forEach(t => tip.append(el("div", {}, t)));
+    tip.style.display = "block";
+    const tx = Math.min(p.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+    tip.style.left = Math.max(8, tx) + "px"; tip.style.top = (p.clientY + 12) + "px";
+  };
+  const hide = () => { tip.style.display = "none"; cursor.setAttribute("visibility", "hidden"); };
+  s.addEventListener("mousemove", move); s.addEventListener("touchmove", move, { passive: true });
+  s.addEventListener("mouseleave", hide); s.addEventListener("touchend", hide);
+  return s;
+}
+
+$("#f").addEventListener("submit", e => {
+  e.preventDefault();
+  const p = new URLSearchParams();
+  for (const inp of e.target.elements) if (inp.name && inp.value) p.set(inp.name, inp.value);
+  run(p.toString());
+});
+document.querySelectorAll(".presets button").forEach(bt => bt.addEventListener("click", () => {
+  fillForm(bt.dataset.p); run(bt.dataset.p);
+}));
+const init = location.search.slice(1) || "debut=2021-04-01&fin=2021-08-01";
+fillForm(init); run(init);
+</script>
+</body>
+</html>
