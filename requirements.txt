@@ -1,3 +1,3 @@
 Flask>=3.0.0,<4
 gunicorn>=21.2.0,<22
-ccxt>=4.1.0,<5
+ccxt==4.5.93  # version figée le 22/11/2026 (testée) ; ne la changer qu'après les tests (pytest -q)
