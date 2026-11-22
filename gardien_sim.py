@@ -19,6 +19,7 @@ Les ordres sont simulés comme des ordres LIMIT (maker) au prix Kraken du moment
 """
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import time
@@ -204,22 +205,109 @@ def check_intraday(pf: dict, ticker: dict, fee_stop: float, slip_stop: float, no
 
 
 def replay(candles: list, capital: float = 100.0, fee: float = 0.004, k: float = 12.0,
-           fee_stop: float = 0.008, slip_stop: float = 0.005) -> dict:
+           fee_stop: float = 0.008, slip_stop: float = 0.005, start: Optional[str] = None, end: Optional[str] = None,
+           outage_start: Optional[str] = None, outage_days: int = 0, trace: Optional[list] = None) -> dict:
     """REJEU HISTORIQUE avec le VRAI code du bot : chaque jour, juste après la clôture, le gardien
     1) vérifie/remonte son stop, 2) applique le signal au prix d'ouverture du lendemain.
-    Sert à comparer le bot au laboratoire (mêmes trades attendus) et à tester des années de marché en virtuel."""
+    Sert à comparer le bot au laboratoire (mêmes trades attendus) et à tester des périodes passées en virtuel.
+
+    start / end (AAAA-MM-JJ) : période d'essai (le portefeuille démarre à start avec `capital`, en euros ;
+    les moyennes sont calculées sur tout l'historique disponible avant, comme en vrai).
+    outage_start + outage_days : PANNE simulée — le serveur ne fait rien pendant ces jours ; au redémarrage,
+    les jours manqués sont rattrapés (le stop, lui, est censé être resté posé chez Kraken).
+    trace : liste remplie, si fournie, avec l'état du portefeuille à chaque clôture."""
     ef, es, et, pos, _ = gardien._replay(candles)
     atrs = gardien.atr(candles)
     closes = [c[-1] for c in candles]
-    pf = new_portfolio(capital, now=candles[0][0])
-    for i in range(gardien.TREND, len(candles) - 1):
+    days = [_day(c[0]) for c in candles]
+    i0 = gardien.TREND
+    if start:
+        i0 = max(i0, next((i for i, d in enumerate(days) if d >= start), len(days)))
+    i1 = len(candles) - 1
+    if end:
+        i1 = min(i1, max((i for i, d in enumerate(days) if d <= end), default=-1))
+    out_lo = outage_start or "9999"
+    out_hi = _day(calendar.timegm(time.strptime(outage_start, "%Y-%m-%d")) + outage_days * DAY_SEC) \
+        if outage_start and outage_days > 0 else "0000"
+    pf = new_portfolio(capital, now=candles[min(i0, len(candles) - 1)][0])
+    for i in range(i0, i1 + 1):
         now = candles[i][0] + DAY_SEC
-        process_closed_days(pf, candles[: i + 1], atrs[: i + 1], k, fee_stop, slip_stop, now=now)
-        signal = {"jour_cloture_utc": _day(candles[i][0]),
-                  "position_theorique": "ACHETEUR (BTC)" if pos[i] else "EN EUROS",
-                  "ema20_au_dessus_ema50": ef[i] > es[i], "prix_au_dessus_ema200": closes[i] > et[i]}
-        apply_signal(pf, signal, candles[i + 1][1], fee, now=now)
+        down = out_lo <= _day(now) < out_hi  # le matin de ce jour, le serveur est en panne
+        if not down:
+            process_closed_days(pf, candles[: i + 1], atrs[: i + 1], k, fee_stop, slip_stop, now=now)
+        if trace is not None:
+            v = pf["euros"] + pf["btc"] * closes[i]
+            trace.append({"jour": days[i], "cloture": round(closes[i], 2),
+                          "signal": "ACHETEUR (BTC)" if pos[i] else "EN EUROS",
+                          "en_position": pf["en_position"],
+                          "stop": round(pf["stop_protection"], 2) if pf.get("stop_protection") else None,
+                          "valeur_eur": round(v, 2), "serveur": "EN PANNE" if down else "ok"})
+        if i + 1 < len(candles) and i < i1 and not down:
+            signal = {"jour_cloture_utc": days[i],
+                      "position_theorique": "ACHETEUR (BTC)" if pos[i] else "EN EUROS",
+                      "ema20_au_dessus_ema50": ef[i] > es[i], "prix_au_dessus_ema200": closes[i] > et[i]}
+            apply_signal(pf, signal, candles[i + 1][1], fee, now=now)
     return pf
+
+
+def load_history_csv(path: str) -> list:
+    """Historique journalier fourni avec le bot (data/btceur_journalier.csv) → bougies (ts, o, h, l, c)."""
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or line.startswith("ts,") or not line.strip():
+                continue
+            ts, o, h, l, c = line.strip().split(",")
+            out.append((int(ts), float(o), float(h), float(l), float(c)))
+    return out
+
+
+def merge_history(history: list, live: list) -> list:
+    """Historique long (fichier) + bougies Kraken récentes : Kraken fait foi dès sa première bougie."""
+    if not live:
+        return list(history)
+    first = live[0][0]
+    return [c for c in history if c[0] < first] + list(live)
+
+
+def trial(candles: list, start: str, end: str, capital: float, fee: float, k: float, fee_stop: float,
+          slip_stop: float, outage_start: Optional[str] = None, outage_days: int = 0) -> dict:
+    """MODE D'ESSAI : rejoue le gardien sur une période passée et résume le résultat (aucun ordre, aucun fichier)."""
+    trace: list = []
+    pf = replay(candles, capital, fee, k, fee_stop, slip_stop, start, end, outage_start, outage_days, trace)
+    if not trace:
+        raise ValueError("période vide ou trop proche du début de l'historique (il faut 200 jours avant pour l'EMA200)")
+    values = [t["valeur_eur"] for t in trace]
+    peak, dd = values[0], 0.0
+    for v in values:
+        peak = max(peak, v)
+        dd = min(dd, v / peak - 1)
+    first_close, last_close = trace[0]["cloture"], trace[-1]["cloture"]
+    bh = capital * (1 - fee) * (last_close / first_close) * (1 - fee)
+    prices = [t["cloture"] for t in trace]
+    peak, bh_dd = prices[0], 0.0
+    for p in prices:
+        peak = max(peak, p)
+        bh_dd = min(bh_dd, p / peak - 1)
+    final = values[-1]
+    return {
+        "periode": {"debut": trace[0]["jour"], "fin": trace[-1]["jour"], "jours": len(trace)},
+        "panne_simulee": ({"debut": outage_start, "jours": outage_days} if outage_start and outage_days > 0 else None),
+        "resultat": {
+            "capital_initial_eur": round(capital, 2),
+            "valeur_finale_eur": round(final, 2),
+            "resultat_pct": round((final / capital - 1) * 100, 2),
+            "perte_max_pct": round(dd * 100, 1),
+            "frais_payes_eur": round(pf["frais_payes_eur"], 2),
+            "nb_operations": len(pf["trades"]),
+            "en_position_a_la_fin": pf["en_position"],
+            "stop_a_la_fin": round(pf["stop_protection"], 2) if pf.get("stop_protection") else None,
+        },
+        "comparaison_acheter_garder": {"resultat_pct": round((bh / capital - 1) * 100, 2),
+                                        "perte_max_pct": round(bh_dd * 100, 1)},
+        "operations": pf["trades"],
+        "jours": trace,
+    }
 
 
 def summary(pf: dict, price: Optional[float]) -> dict:

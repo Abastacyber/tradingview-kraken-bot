@@ -802,6 +802,58 @@ def gardien_portefeuille():
     return jsonify(out), 200
 
 
+GARDIEN_HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "btceur_journalier.csv")
+
+
+@app.get("/gardien/essai")
+def gardien_essai():
+    """MODE D'ESSAI (étape 6) : rejoue le VRAI code du gardien (signal + stop + portefeuille) sur une période passée.
+    Paramètres (facultatifs) : debut, fin (AAAA-MM-JJ), panne_debut (AAAA-MM-JJ), panne_jours, stop_atr, capital.
+    Portefeuille d'essai séparé : ne touche ni au portefeuille simulé en direct, ni à Kraken."""
+    q = request.args
+    try:
+        def _date(name, default=None):
+            v = q.get(name, default)
+            if v:
+                time.strptime(v, "%Y-%m-%d")
+            return v
+        debut = _date("debut", time.strftime("%Y-%m-%d", time.gmtime(time.time() - 365 * 86400)))
+        fin = _date("fin")
+        panne_debut = _date("panne_debut")
+        panne_jours = max(0, min(60, int(q.get("panne_jours", 7 if panne_debut else 0))))
+        k = float(q.get("stop_atr", GARDIEN_STOP_ATR_K))
+        capital = float(q.get("capital", GARDIEN_CAPITAL_EUR))
+        if not (1 <= k <= 50) or not (1 <= capital <= 1_000_000):
+            raise ValueError("stop_atr doit être entre 1 et 50, capital entre 1 et 1 000 000")
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": "parametres_invalides", "detail": str(e),
+                        "exemple": "/gardien/essai?debut=2021-04-01&fin=2021-08-01&panne_debut=2021-05-10&panne_jours=7"}), 400
+    try:
+        history = gardien_sim.load_history_csv(GARDIEN_HISTORY_CSV)
+    except OSError:
+        history = []
+    try:
+        with _gardien_lock:
+            live = _gardien_cache.get("candles") if time.time() - _gardien_cache["ts"] < GARDIEN_CACHE_SEC else None
+        if not live:
+            _gardien_refresh()
+            live = _gardien_cache["candles"]
+    except Exception:
+        live = []  # Kraken indisponible : l'historique du fichier suffit pour les périodes passées
+    candles = gardien_sim.merge_history(history, live)
+    try:
+        out = gardien_sim.trial(candles, debut, fin, capital, GARDIEN_FEE_PCT, k, GARDIEN_STOP_FEE_PCT,
+                                GARDIEN_STOP_SLIP_PCT, panne_debut, panne_jours)
+    except ValueError as e:
+        return jsonify({"error": "essai_impossible", "detail": str(e)}), 400
+    out["regle"] = (f"ORION GARDIEN v1 : achat si EMA20 > EMA50 et prix > EMA200, vente si EMA20 < EMA50 (journalier) ; "
+                    f"ordres limit {GARDIEN_FEE_PCT * 100:.2f} % ; stop suiveur plus haut − {k:g} × ATR14 "
+                    f"(vente {GARDIEN_STOP_FEE_PCT * 100:.2f} % + {GARDIEN_STOP_SLIP_PCT * 100:.2f} % de glissement)")
+    out["donnees"] = "historique BTC/EUR 2020-2026 fourni avec le bot (Binance) + bougies Kraken récentes"
+    out["ordres"] = "aucun (essai sur le passé)"
+    return jsonify(out), 200
+
+
 @app.get("/gardien/journal")
 def gardien_journal():
     """Décisions des 30 derniers jours + vérifications récentes de l'horloge. Ne passe AUCUN ordre."""

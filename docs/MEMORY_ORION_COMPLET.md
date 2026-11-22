@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action technique : gardien, étape 6** (rejeu historique et période de simulation en direct). Voir § 9.
+**Prochaine action :** essais virtuels avec `/gardien/essai` et période de simulation en direct ; avant le réel : réconciliation Kraken, ccxt figé. Voir § 9.
 
 ---
 
@@ -90,7 +90,8 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 | `/health` | État du bot : clés présentes, mode simulation, position de l'ancien flux |
 | `/gardien/signal` | Signal du jour : prix, EMA20/50/200, position théorique, ce qu'il manque pour acheter |
 | `/gardien/journal` | Décisions des 30 derniers jours et vérifications récentes de l'horloge |
-| `/gardien/portefeuille` | Portefeuille **simulé** : enveloppe, euros, BTC, valeur, résultat net, frais, opérations |
+| `/gardien/portefeuille` | Portefeuille **simulé** : enveloppe, euros, BTC, valeur, résultat net, frais, opérations, stop de protection |
+| `/gardien/essai` | **Mode d'essai** : rejoue le gardien sur une période passée. Ex. `/gardien/essai?debut=2021-04-01&fin=2021-08-01&panne_debut=2021-05-10&panne_jours=7` |
 
 ---
 
@@ -174,8 +175,9 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 |---|---|
 | `app.py` | Serveur Flask : routes, ancien flux webhook (achat/vente désactivés), horloge et simulation du gardien |
 | `gardien.py` | Signal journalier en Python pur : EMA, rejeu de la règle, journal |
-| `gardien_sim.py` | Portefeuille simulé : enveloppe, ordres limit simulés, résultat net de frais |
-| `tests/` | 51 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
+| `gardien_sim.py` | Portefeuille simulé : enveloppe, ordres limit simulés, stop de protection, rejeu historique, mode d'essai |
+| `data/btceur_journalier.csv` | Historique journalier BTC/EUR 2020-2026 pour le mode d'essai |
+| `tests/` | 57 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
 | `lab/` | Laboratoire : données, moteur de backtest, stratégies, expériences, rapports dans `lab/results/` |
 | `docs/MEMORY_ORION.md` | Mémoire vivante, datée (fait foi) |
 | `docs/MEMORY_ORION_COMPLET.md` | Ce document : mémoire complète, pour reprendre de zéro |
@@ -194,7 +196,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 3. Enveloppe et portefeuille simulé, `/gardien/portefeuille` | ✅ 20/11 ; 100 € simulés, ordres limit à 0,40 % |
 | 4. Mémoire durable | ✅ 20/11 : disque persistant Render `/var/data` (1 Go), `GARDIEN_DATA_DIR=/var/data`, vérifié sur `/health`. La réconciliation avec Kraken viendra avant le passage en réel |
 | 5. Stop de protection | ✅ 22/11 **en simulation** : suiveur 12 ATR, rejeu historique identique au labo. Pose réelle chez Kraken au passage en réel |
-| 6. Rejeu historique et période de simulation | à faire |
+| 6. Rejeu historique et période de simulation | 🟡 22/11 : rejeu historique (bot = labo) + **mode d'essai** `/gardien/essai` ; reste la période de simulation en direct |
 | 7. Micro-réel (proposition : 100 €, décision du propriétaire) | à faire |
 
 ### Réglages Render (noms seulement ; les valeurs secrètes ne sont jamais écrites)
@@ -301,3 +303,4 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 20/11 | **Option 1 choisie** (ORION calcule le signal). Gardien étapes 1, 2 et 3. EXP04a, EXP04b, EXP05. Frais Kraken officiels confirmés. Achat/vente par webhook TradingView désactivés |
 | 20/11 (soir) | Mémoire complète enregistrée dans le dépôt. **Disque persistant choisi** pour l'étape 4 ; code fait (portefeuille et journal relus au redémarrage, fichier abîmé mis de côté, jamais effacé) |
 | 22/11 | EXP06 (stop de protection). **Option A : suiveur 12 ATR**. Étape 5 codée en simulation + rejeu historique (bot = labo). Veille du 22/11 récupérée |
+| 22/11 (soir) | Étape 5 en ligne. **Étape 6 : mode d'essai** `/gardien/essai` (périodes passées, panne simulable) |

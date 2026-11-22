@@ -39,12 +39,13 @@ Deux circuits distincts :
 | Branche de travail GitHub | `feature/orion-protocol-v1` |
 | Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
-| Tests automatiques | 51 tests, tous PASS (dont rejeu historique bot = labo, qui demande l'historique du labo téléchargé) |
+| Tests automatiques | 57 tests, tous PASS (dont rejeu historique bot = labo, qui demande l'historique du labo téléchargé) |
 | **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
 | **Gardien — étape 3** (portefeuille simulé) | **fait le 20/11** : enveloppe `GARDIEN_CAPITAL_EUR` (100 € simulés), ordres limit simulés 0,40 %, `/gardien/portefeuille` ; fichier en /tmp (non durable → étape 4) |
 | Webhook TradingView BUY/SELL | **désactivé le 20/11** (`WEBHOOK_TRADING_ENABLED=false`) : le gardien est le seul décideur ; PING fonctionne. Le script `tools/orion_test_dry_run.ps1` (ancien flux) n'est plus utile |
 | **Gardien — étape 4** (mémoire durable) | **code fait le 20/11** : dossier `GARDIEN_DATA_DIR` (défaut /tmp) ; portefeuille + journal relus au redémarrage ; fichier abîmé mis de côté, jamais effacé ; `/health` affiche `gardien_stockage_durable`. ✅ **VALIDÉ le 20/11** : disque Render `/var/data` (1 Go) + `GARDIEN_DATA_DIR=/var/data` ; `/health` → `gardien_stockage_durable: true`, `creds_ok: true` (nouvelle clé). Le portefeuille simulé repart de 100 € au 20/11 (premier démarrage sur le disque) |
-| **Gardien — étape 5** (stop de protection, SIMULÉ) | **codé le 22/11** (option A, EXP06) : stop suiveur = plus haut depuis l'achat − 12 × ATR14 journalier, jamais redescendu ; vente simulée taker 0,80 % + 0,50 % de glissement ; rattrapage des jours manqués (panne) ; contrôle horaire du plus bas du jour Kraken. **Rejeu historique** : le code du bot retrouve exactement les trades du labo (BTC et ETH, 12 et 3 ATR). Visible sur `/gardien/portefeuille`. Aucun ordre réel. Mise en ligne : en attente de l'accord du propriétaire |
+| **Gardien — étape 5** (stop de protection, SIMULÉ) | **en ligne le 22/11** (option A, EXP06) : stop suiveur = plus haut depuis l'achat − 12 × ATR14 journalier, jamais redescendu ; vente simulée taker 0,80 % + 0,50 % de glissement ; rattrapage des jours manqués (panne) ; contrôle horaire du plus bas du jour Kraken. **Rejeu historique** : le code du bot retrouve exactement les trades du labo (BTC et ETH, 12 et 3 ATR). Visible sur `/gardien/portefeuille`. Aucun ordre réel |
+| **Gardien — étape 6** (essais virtuels) | **mode d'essai fait le 22/11** : `/gardien/essai?debut=AAAA-MM-JJ&fin=AAAA-MM-JJ` (+ `panne_debut`, `panne_jours`, `stop_atr`, `capital`) rejoue le VRAI code (signal + stop + portefeuille) sur le passé, portefeuille d'essai séparé, aucun ordre. Historique fourni : `data/btceur_journalier.csv` (2020-2026) + Kraken. Reste : période de simulation en direct (plusieurs semaines) |
 | **Gardien — étape 2** (horloge + journal) | **fait le 20/11** : vérification toutes les heures, `/gardien/journal` (30 derniers jours + vérifications) ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
 | Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
@@ -100,7 +101,7 @@ Deux circuits distincts :
 2. **Claude — construction du gardien (option 1 décidée le 20/11 : ORION calcule lui-même le signal)** :
    ✅ étape 1 signal lecture seule · ✅ étape 2 horloge + journal · ✅ étape 3 enveloppe ORION_CAPITAL
    + exécution DRY_RUN en ordres limit simulés · ✅ étape 4 état durable (disque Render ; réconciliation Kraken
-   avant LIVE) · ✅ étape 5 stop suiveur 12 ATR (simulé, 22/11) · **prochaine : étape 6** · étape 5 stop de protection chez Kraken ·
+   avant LIVE) · ✅ étape 5 stop suiveur 12 ATR (simulé, 22/11) · 🟡 étape 6 : mode d'essai fait (22/11), période de simulation en direct en cours · étape 5 stop de protection chez Kraken ·
    étape 6 rejeu historique + période DRY_RUN · étape 7 micro-LIVE (100 € proposés, décision du propriétaire).
    En parallèle : EXP04 (indicateurs institutionnels + AEGIS comme filtres/dosage). Plus tard : TradingView en « deuxième avis ».
 3. **Décision prise le 20/11 :** ORION calcule lui-même le signal (option 1) ; TradingView reviendra en deuxième avis.
@@ -122,6 +123,9 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **22/11/2026 (2)** — Étape 5 en ligne. **Étape 6 : mode d'essai** `/gardien/essai` (rejeu du vrai code sur une période passée, panne simulable).
+  Mai 2021 : vente sur signal le 13/05 (-18 % sur le trade, acheter-garder -32 % sur la période) ; panne de 7 jours → vente retardée, -6 points ;
+  le stop 12 ATR ne se déclenche pas (trop large en 2021, ≈ 58 % sous le plus haut) — conforme à EXP06. 57 tests.
 - **22/11/2026** — Option A choisie (stop suiveur 12 ATR). **Étape 5 codée en simulation** + rejeu historique du vrai code du bot sur 2020-2026 :
   mêmes trades que le labo. Veille du 22/11 récupérée (`docs/veille/VEILLE_2026-11-22.md`) : BTC 54 887 € le 21/11, gardien en euros,
   frais inchangés ; à faire avant LIVE : **fixer la version de ccxt** dans `requirements.txt`.
