@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action technique : gardien, étape 5** (stop de protection posé chez Kraken). Voir § 9.
+**Prochaine action technique : gardien, étape 6** (rejeu historique et période de simulation en direct). Voir § 9.
 
 ---
 
@@ -107,7 +107,7 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 - **Entre les deux :** on garde la position.
 - **Pas d'achat de rattrapage :** au démarrage, ou si la position a été manquée, on n'achète que si les deux conditions d'achat sont réunies ce jour-là.
 - **Ordres :** **limit** (frais 0,40 %) plutôt qu'au marché (0,80 %).
-- **Stop de protection** posé chez Kraken : proposition EXP06 = suiveur 12 ATR (décision du propriétaire attendue). C'est une assurance contre un krach brutal ou une panne, pas l'outil de sortie normal. Il sera fait à l'étape 5.
+- **Stop de protection** posé chez Kraken : **suiveur 12 ATR** (plus haut depuis l'achat − 12 × ATR14, jamais redescendu ; EXP06, option A choisie le 22/11). C'est une assurance contre un krach brutal ou une panne, pas l'outil de sortie normal. Il sera fait à l'étape 5.
 - **Enveloppe :** le bot n'utilise que le montant qui lui est alloué, jamais tout le solde Kraken.
 - **Rythme attendu :** environ 2 à 5 allers-retours par an. Le bot passe de longues périodes en euros : c'est voulu, il protège le capital pendant les chutes.
 
@@ -175,7 +175,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | `app.py` | Serveur Flask : routes, ancien flux webhook (achat/vente désactivés), horloge et simulation du gardien |
 | `gardien.py` | Signal journalier en Python pur : EMA, rejeu de la règle, journal |
 | `gardien_sim.py` | Portefeuille simulé : enveloppe, ordres limit simulés, résultat net de frais |
-| `tests/` | 35 tests automatiques (34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
+| `tests/` | 51 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
 | `lab/` | Laboratoire : données, moteur de backtest, stratégies, expériences, rapports dans `lab/results/` |
 | `docs/MEMORY_ORION.md` | Mémoire vivante, datée (fait foi) |
 | `docs/MEMORY_ORION_COMPLET.md` | Ce document : mémoire complète, pour reprendre de zéro |
@@ -193,7 +193,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 2. Horloge horaire et journal, `/gardien/journal` | ✅ 20/11 |
 | 3. Enveloppe et portefeuille simulé, `/gardien/portefeuille` | ✅ 20/11 ; 100 € simulés, ordres limit à 0,40 % |
 | 4. Mémoire durable | ✅ 20/11 : disque persistant Render `/var/data` (1 Go), `GARDIEN_DATA_DIR=/var/data`, vérifié sur `/health`. La réconciliation avec Kraken viendra avant le passage en réel |
-| 5. Stop de protection posé chez Kraken | ⏭️ **prochaine étape** |
+| 5. Stop de protection | ✅ 22/11 **en simulation** : suiveur 12 ATR, rejeu historique identique au labo. Pose réelle chez Kraken au passage en réel |
 | 6. Rejeu historique et période de simulation | à faire |
 | 7. Micro-réel (proposition : 100 €, décision du propriétaire) | à faire |
 
@@ -226,6 +226,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
   - droit « Requête » sur la clé API ;
   - anti-doublon persistant ;
   - vérification de l'écart de prix (`MAX_PRICE_DEVIATION_PCT`, présent mais non branché).
+- **Fixer la version de ccxt** dans `requirements.txt` avant le passage en réel (veille du 22/11).
 - **À mettre à jour quand le gardien passera en réel :** `FEE_BUFFER_PCT` (0,15 % réglé sur Render, vérifié le 20/11 ; 0,20 % par défaut dans le code) est inférieur aux frais réels.
 
 ---
@@ -299,3 +300,4 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 18/11 | Veille récupérée, mécanisme de veille corrigé, procédure « nouvelle conversation » ajoutée |
 | 20/11 | **Option 1 choisie** (ORION calcule le signal). Gardien étapes 1, 2 et 3. EXP04a, EXP04b, EXP05. Frais Kraken officiels confirmés. Achat/vente par webhook TradingView désactivés |
 | 20/11 (soir) | Mémoire complète enregistrée dans le dépôt. **Disque persistant choisi** pour l'étape 4 ; code fait (portefeuille et journal relus au redémarrage, fichier abîmé mis de côté, jamais effacé) |
+| 22/11 | EXP06 (stop de protection). **Option A : suiveur 12 ATR**. Étape 5 codée en simulation + rejeu historique (bot = labo). Veille du 22/11 récupérée |
