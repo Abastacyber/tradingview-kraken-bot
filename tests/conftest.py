@@ -15,3 +15,5 @@ def _offline_gardien(monkeypatch, tmp_path):
     monkeypatch.setenv("GARDIEN_STATE_FILE", str(tmp_path / "gardien_pf.json"))
     import gardien_sim
     monkeypatch.setattr(gardien_sim, "fetch_price", lambda pair="XBTEUR": 100.0)
+    monkeypatch.setattr(gardien_sim, "fetch_ticker",
+                        lambda pair="XBTEUR": {"prix": 100.0, "ouverture_jour": 100.0, "plus_bas_jour": 100.0})

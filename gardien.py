@@ -24,7 +24,11 @@ DAY_SEC = 86400
 KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC?pair={pair}&interval=1440"
 MIN_CANDLES = TREND + 50  # assez d'historique pour que l'EMA200 soit fiable
 
-Candle = Tuple[int, float]  # (horodatage d'ouverture UTC en secondes, clôture)
+# Bougie : (horodatage d'ouverture UTC en secondes, ouverture, plus haut, plus bas, clôture).
+# Les tests peuvent fournir des bougies réduites (horodatage, clôture) : la clôture est TOUJOURS le dernier élément.
+Candle = Tuple[float, ...]
+STOP_ATR_K = 12.0  # stop de protection : plus haut depuis l'achat − 12 × ATR14 (EXP06, décision du 22/11/2026)
+ATR_N = 14
 
 
 def ema(values: List[float], span: int) -> List[float]:
@@ -47,20 +51,46 @@ def fetch_daily_candles(pair: str = "XBTEUR", now: Optional[float] = None,
         raise RuntimeError(f"Kraken OHLC: {payload['error']}")
     key = next(k for k in payload["result"] if k != "last")
     now = time.time() if now is None else now
-    candles = [(int(row[0]), float(row[4])) for row in payload["result"][key]]
+    candles = [(int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]))
+               for row in payload["result"][key]]
     return [c for c in candles if c[0] + DAY_SEC <= now]
+
+
+def high_low(c: Candle) -> Tuple[float, float]:
+    """Plus haut et plus bas d'une bougie (une bougie réduite n'a que sa clôture)."""
+    return (c[2], c[3]) if len(c) >= 5 else (c[-1], c[-1])
+
+
+def ohlc(c: Candle) -> Tuple[float, float, float, float]:
+    """(ouverture, plus haut, plus bas, clôture) d'une bougie (une bougie réduite n'a que sa clôture)."""
+    return (c[1], c[2], c[3], c[4]) if len(c) >= 5 else (c[-1], c[-1], c[-1], c[-1])
+
+
+def atr(candles: List[Candle], n: int = ATR_N) -> List[float]:
+    """ATR (moyenne de Wilder du « vrai range »), identique à lab/engine.atr (pandas ewm alpha=1/n, adjust=False)."""
+    out: List[float] = []
+    a: Optional[float] = None
+    prev_close: Optional[float] = None
+    for c in candles:
+        h, l = high_low(c)
+        tr = h - l if prev_close is None else max(h - l, abs(h - prev_close), abs(l - prev_close))
+        a = tr if a is None else a + (tr - a) / n
+        out.append(a)
+        prev_close = c[-1]
+    return out
 
 
 def _replay(candles: List[Candle]):
     """Rejoue la règle jour par jour. Renvoie les EMA et la position après chaque clôture."""
     if len(candles) < MIN_CANDLES:
         raise ValueError(f"historique insuffisant ({len(candles)} bougies, {MIN_CANDLES} nécessaires)")
-    closes = [c for _, c in candles]
+    closes = [c[-1] for c in candles]
     ef, es, et = ema(closes, FAST), ema(closes, SLOW), ema(closes, TREND)
     positions: List[bool] = []
     in_pos = False
     last_change: Optional[int] = None
-    for i, (ts, close) in enumerate(candles):
+    for i, cd in enumerate(candles):
+        ts, close = cd[0], cd[-1]
         if i >= TREND:  # avant : période de chauffe de l'EMA200
             if not in_pos and ef[i] > es[i] and close > et[i]:
                 in_pos, last_change = True, ts
@@ -75,7 +105,7 @@ def daily_history(candles: List[Candle], days: int = 30) -> List[dict]:
     ef, es, et, pos, _ = _replay(candles)
     out = []
     for i in range(len(candles) - 1, max(len(candles) - 1 - days, 0), -1):
-        ts, close = candles[i]
+        ts, close = candles[i][0], candles[i][-1]
         out.append({
             "jour_cloture_utc": time.strftime("%Y-%m-%d", time.gmtime(ts)),
             "cloture": round(close, 2), "ema20": round(ef[i], 2), "ema50": round(es[i], 2), "ema200": round(et[i], 2),
@@ -89,7 +119,7 @@ def compute_signal(candles: List[Candle]) -> dict:
     """Rejoue la règle sur tout l'historique et renvoie l'état du gardien au dernier jour clôturé."""
     ef, es, et, positions, last_change = _replay(candles)
     in_pos = positions[-1]
-    ts, close = candles[-1]
+    ts, close = candles[-1][0], candles[-1][-1]
     f, s, t = ef[-1], es[-1], et[-1]
     buy_ok = f > s and close > t
     day = time.strftime("%Y-%m-%d", time.gmtime(ts))

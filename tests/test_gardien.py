@@ -54,7 +54,7 @@ def test_unclosed_candle_is_dropped():
     body = json.dumps({"error": [], "result": {"XXBTZEUR": rows, "last": 0}}).encode()
     now = rows[-1][0] + 3600  # la dernière bougie est en cours
     out = gardien.fetch_daily_candles(now=now, opener=lambda *a, **k: io.BytesIO(body))
-    assert [c for _, c in out] == [100.0, 101.0]
+    assert [c[-1] for c in out] == [100.0, 101.0]
 
 
 def test_parity_with_lab_on_real_btc_history():

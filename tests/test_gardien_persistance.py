@@ -49,12 +49,14 @@ def test_portfolio_and_journal_survive_restart(monkeypatch, tmp_path):
     assert A.GARDIEN_STATE_FILE == str(tmp_path / "disque" / "gardien_portefeuille.json")
     monkeypatch.setattr(A.gardien, "fetch_daily_candles", lambda pair: series([100 + i for i in range(300)]))
     monkeypatch.setattr(A.gardien_sim, "fetch_price", lambda pair: 400.0)
+    monkeypatch.setattr(A.gardien_sim, "fetch_ticker", lambda pair: {"prix": 400.0, "ouverture_jour": 400.0, "plus_bas_jour": 400.0})
     assert A._gardien_tick()["operation_simulee"].startswith("ACHAT")
 
     # « Redémarrage » : on recharge le serveur depuis zéro, même dossier de stockage.
     B = _start_app(monkeypatch, tmp_path)
     monkeypatch.setattr(B.gardien, "fetch_daily_candles", lambda pair: series([100 + i for i in range(300)]))
     monkeypatch.setattr(B.gardien_sim, "fetch_price", lambda pair: 400.0)
+    monkeypatch.setattr(B.gardien_sim, "fetch_ticker", lambda pair: {"prix": 400.0, "ouverture_jour": 400.0, "plus_bas_jour": 400.0})
     assert len(B._gardien_checks) == 1  # journal relu
     pf = B.app.test_client().get("/gardien/portefeuille").get_json()
     assert pf["en_position"] is True and len(pf["trades"]) == 1  # portefeuille relu

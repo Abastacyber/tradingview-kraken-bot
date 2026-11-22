@@ -62,6 +62,7 @@ def test_tick_runs_simulation_and_endpoint(monkeypatch, tmp_path):
     A._gardien_checks.clear()
     monkeypatch.setattr(A.gardien, "fetch_daily_candles", lambda pair: series([100 + i for i in range(300)]))
     monkeypatch.setattr(A.gardien_sim, "fetch_price", lambda pair: 400.0)
+    monkeypatch.setattr(A.gardien_sim, "fetch_ticker", lambda pair: {"prix": 400.0, "ouverture_jour": 400.0, "plus_bas_jour": 400.0})
     entry = A._gardien_tick()
     assert entry["operation_simulee"].startswith("ACHAT")
     assert A._gardien_tick().get("operation_simulee") is None  # même jour : pas de second ordre

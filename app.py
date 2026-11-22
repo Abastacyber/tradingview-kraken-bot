@@ -8,7 +8,7 @@ import uuid
 
 from collections import OrderedDict, deque
 from functools import lru_cache
-from typing import Any, Dict, Tuple, Optional, Callable
+from typing import Any, Dict, List, Tuple, Optional, Callable
 from flask import Flask, request, jsonify
 import ccxt
 
@@ -683,6 +683,9 @@ def _gardien_refresh() -> Dict[str, Any]:
 # --- Étape 3 : portefeuille SIMULÉ du gardien (jamais d'ordre réel, même si DRY_RUN=false) ---
 GARDIEN_CAPITAL_EUR = max(0.0, env_float("GARDIEN_CAPITAL_EUR", 100.0))  # enveloppe ORION (simulée)
 GARDIEN_FEE_PCT = env_float("GARDIEN_FEE_PCT", 0.004)  # ordre limit Kraken Pro palier 1 (maker 0,40 %)
+GARDIEN_STOP_ATR_K = env_float("GARDIEN_STOP_ATR_K", gardien.STOP_ATR_K)  # stop suiveur : plus haut − K × ATR14 (EXP06)
+GARDIEN_STOP_FEE_PCT = env_float("GARDIEN_STOP_FEE_PCT", 0.008)   # sortie par stop = ordre taker 0,80 %
+GARDIEN_STOP_SLIP_PCT = env_float("GARDIEN_STOP_SLIP_PCT", 0.005)  # glissement prudent d'une vente par stop
 GARDIEN_STATE_FILE = env_str("GARDIEN_STATE_FILE", os.path.join(GARDIEN_DATA_DIR, "gardien_portefeuille.json"))
 _gardien_pf_lock = threading.Lock()
 
@@ -694,18 +697,27 @@ def _gardien_portfolio() -> Dict[str, Any]:
     return pf
 
 
-def _gardien_simulate(signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Applique la décision du jour au portefeuille simulé (une fois par jour clôturé)."""
+def _gardien_simulate(signal: Dict[str, Any], candles: list) -> List[Dict[str, Any]]:
+    """Portefeuille simulé, à chaque vérification de l'horloge :
+    1) stop de protection : touché pendant un jour clôturé (rattrapage après une panne) ? sinon il est remonté ;
+    2) décision du jour clôturé (une seule fois par jour) ;
+    3) stop touché pendant le jour en cours (plus bas du jour Kraken) ?"""
+    ops: List[Dict[str, Any]] = []
     with _gardien_pf_lock:
         pf = _gardien_portfolio()
-        if pf.get("dernier_jour_traite") == signal["jour_cloture_utc"]:
-            return None
-        price = gardien_sim.fetch_price("XBTEUR")
-        op = gardien_sim.apply_signal(pf, signal, price, GARDIEN_FEE_PCT)
+        ticker = gardien_sim.fetch_ticker("XBTEUR")
+        ops += gardien_sim.process_closed_days(pf, candles, gardien.atr(candles), GARDIEN_STOP_ATR_K,
+                                               GARDIEN_STOP_FEE_PCT, GARDIEN_STOP_SLIP_PCT)
+        op = gardien_sim.apply_signal(pf, signal, ticker["prix"], GARDIEN_FEE_PCT)
+        if op:
+            ops.append(op)
+        op = gardien_sim.check_intraday(pf, ticker, GARDIEN_STOP_FEE_PCT, GARDIEN_STOP_SLIP_PCT)
+        if op:
+            ops.append(op)
         gardien_sim.save(GARDIEN_STATE_FILE, pf)
-    if op:
+    for op in ops:
         log.warning("[GARDIEN-SIM] %s %s @ %.2f (%.2f EUR)", op["type"], op["jour"], op["prix"], op["montant_eur"])
-    return op
+    return ops
 
 
 def _gardien_tick() -> Dict[str, Any]:
@@ -722,9 +734,9 @@ def _gardien_tick() -> Dict[str, Any]:
         elif not previous or previous.get("jour_cloture_utc") != entry["jour_cloture_utc"]:
             entry["evenement"] = "nouveau jour clôturé"
             log.info("[GARDIEN] jour %s : %s (clôture %.0f)", entry["jour_cloture_utc"], entry["position"], entry["cloture"])
-        op = _gardien_simulate(data)  # une seule décision par jour clôturé (dédoublonnage interne)
-        if op:
-            entry["operation_simulee"] = op["type"]
+        ops = _gardien_simulate(data, _gardien_cache["candles"])  # une décision par jour clôturé + stop
+        if ops:
+            entry["operation_simulee"] = " + ".join(o["type"] for o in ops)
     except Exception as e:  # Kraken indisponible : on réessaiera à la prochaine vérification
         entry["erreur"] = str(e)[:200]
         log.warning("[GARDIEN] vérification impossible : %s", e)
@@ -782,6 +794,9 @@ def gardien_portefeuille():
         price = None
     out = gardien_sim.summary(pf, price)
     out["frais_par_ordre_pct"] = round(GARDIEN_FEE_PCT * 100, 2)
+    out["regle_stop"] = (f"stop suiveur : plus haut depuis l'achat − {GARDIEN_STOP_ATR_K:g} × ATR14 journalier, "
+                         f"jamais redescendu ; vente simulée à {GARDIEN_STOP_FEE_PCT * 100:.2f} % de frais "
+                         f"+ {GARDIEN_STOP_SLIP_PCT * 100:.2f} % de glissement")
     out["ordres_reels"] = "aucun (simulation)"
     out["stockage"] = _gardien_storage()
     return jsonify(out), 200
@@ -809,7 +824,7 @@ def gardien_journal():
         "stockage": _gardien_storage(),
         "dernieres_verifications": checks[-24:][::-1],
         "derniers_jours": jours,
-        "ordres": "aucun (étape 2 : horloge + journal, lecture seule)",
+        "ordres": "aucun ordre réel (simulation)",
     }), 200
 
 
