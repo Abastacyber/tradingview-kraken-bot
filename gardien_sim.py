@@ -241,7 +241,8 @@ def replay(candles: list, capital: float = 100.0, fee: float = 0.004, k: float =
                           "signal": "ACHETEUR (BTC)" if pos[i] else "EN EUROS",
                           "en_position": pf["en_position"],
                           "stop": round(pf["stop_protection"], 2) if pf.get("stop_protection") else None,
-                          "valeur_eur": round(v, 2), "serveur": "EN PANNE" if down else "ok"})
+                          "valeur_eur": round(v, 2),
+                          "serveur": "EN PANNE" if out_lo <= days[i] < out_hi else "ok"})  # serveur arrêté CE jour-là
         if i + 1 < len(candles) and i < i1 and not down:
             signal = {"jour_cloture_utc": days[i],
                       "position_theorique": "ACHETEUR (BTC)" if pos[i] else "EN EUROS",

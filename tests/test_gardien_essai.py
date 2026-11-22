@@ -43,6 +43,7 @@ def test_outage_delays_the_sale_and_costs_money():
     assert panne["resultat"]["valeur_finale_eur"] < normal["resultat"]["valeur_finale_eur"]
     down = [j for j in panne["jours"] if j["serveur"] == "EN PANNE"]
     assert len(down) == 7 and panne["panne_simulee"] == {"debut": "2021-05-10", "jours": 7}
+    assert down[0]["jour"] == "2021-05-10" and down[-1]["jour"] == "2021-05-16"  # les jours affichés = jours de panne
 
 
 def test_outage_with_tight_stop_is_caught_up_on_restart():
