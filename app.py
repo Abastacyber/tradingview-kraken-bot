@@ -1,4 +1,5 @@
 import os
+import hmac
 import json
 import math
 import time
@@ -14,6 +15,7 @@ import ccxt
 
 import gardien
 import gardien_sim
+import gardien_reconcile
 
 
 # ===== Helpers ENV =====
@@ -859,6 +861,27 @@ def gardien_essai_page():
     """Page lisible du mode d'essai (résumé, graphique, opérations). Elle interroge /gardien/essai."""
     return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages", "essai.html"),
                      mimetype="text/html")
+
+
+@app.get("/gardien/reconciliation")
+def gardien_reconciliation():
+    """RÉCONCILIATION (lecture seule) : compare ce qu'ORION croit avoir à ce que Kraken indique (soldes, ordres ouverts).
+    Protégée par le mot de passe WEBHOOK_SECRET (?secret=... ou en-tête X-Webhook-Token) : elle affiche des soldes."""
+    tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
+    if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
+        return jsonify({"error": "unauthorized", "detail": "ajouter ?secret=<WEBHOOK_SECRET> à l'adresse"}), 401
+    with _gardien_pf_lock:
+        pf = _gardien_portfolio()
+    try:
+        ex = _make_exchange()
+        balance = ex.fetch_balance()
+        orders = ex.fetch_open_orders("BTC/EUR")
+    except Exception as e:  # droit manquant, clé refusée, réseau
+        log.warning("[GARDIEN] réconciliation impossible : %s", str(e)[:200])
+        return jsonify(gardien_reconcile.access_error(e)), 200
+    out = gardien_reconcile.reconcile(pf, balance, orders, simulation=True)  # le gardien n'a pas encore de mode réel
+    out["verifie_a_utc"] = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
+    return jsonify(out), 200
 
 
 @app.get("/gardien/journal")

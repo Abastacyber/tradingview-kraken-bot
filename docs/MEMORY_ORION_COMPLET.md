@@ -91,6 +91,7 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 | `/gardien/signal` | Signal du jour : prix, EMA20/50/200, position théorique, ce qu'il manque pour acheter |
 | `/gardien/journal` | Décisions des 30 derniers jours et vérifications récentes de l'horloge |
 | `/gardien/portefeuille` | Portefeuille **simulé** : enveloppe, euros, BTC, valeur, résultat net, frais, opérations, stop de protection |
+| `/gardien/reconciliation?secret=…` | **Réconciliation** ORION ↔ Kraken (lecture seule, protégée par le mot de passe WEBHOOK_SECRET) : soldes, stop posé, ordres inconnus → OK / ATTENTION / BLOQUANT |
 | `/gardien/essai/page` | **Mode d'essai, page lisible** : formulaire, raccourcis (mai 2021, 2022…), résumé, graphique gardien vs BTC, opérations |
 | `/gardien/essai` | **Mode d'essai** : rejoue le gardien sur une période passée. Ex. `/gardien/essai?debut=2021-04-01&fin=2021-08-01&panne_debut=2021-05-10&panne_jours=7` |
 
@@ -178,8 +179,9 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | `gardien.py` | Signal journalier en Python pur : EMA, rejeu de la règle, journal |
 | `gardien_sim.py` | Portefeuille simulé : enveloppe, ordres limit simulés, stop de protection, rejeu historique, mode d'essai |
 | `pages/essai.html` | Page du mode d'essai |
+| `gardien_reconcile.py` | Réconciliation ORION ↔ Kraken (lecture seule) |
 | `data/btceur_journalier.csv` | Historique journalier BTC/EUR 2020-2026 pour le mode d'essai |
-| `tests/` | 58 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
+| `tests/` | 71 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
 | `lab/` | Laboratoire : données, moteur de backtest, stratégies, expériences, rapports dans `lab/results/` |
 | `docs/MEMORY_ORION.md` | Mémoire vivante, datée (fait foi) |
 | `docs/MEMORY_ORION_COMPLET.md` | Ce document : mémoire complète, pour reprendre de zéro |
@@ -230,7 +232,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
   - droit « Requête » sur la clé API ;
   - anti-doublon persistant ;
   - vérification de l'écart de prix (`MAX_PRICE_DEVIATION_PCT`, présent mais non branché).
-- **Fixer la version de ccxt** dans `requirements.txt` avant le passage en réel (veille du 22/11).
+- ccxt figé à 4.5.93 le 22/11 (test de cohérence `tests/test_versions.py`).
 - **À mettre à jour quand le gardien passera en réel :** `FEE_BUFFER_PCT` (0,15 % réglé sur Render, vérifié le 20/11 ; 0,20 % par défaut dans le code) est inférieur aux frais réels.
 
 ---

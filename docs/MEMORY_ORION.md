@@ -39,7 +39,7 @@ Deux circuits distincts :
 | Branche de travail GitHub | `feature/orion-protocol-v1` |
 | Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
-| Tests automatiques | 58 tests, tous PASS (dont rejeu historique bot = labo, qui demande l'historique du labo téléchargé) |
+| Tests automatiques | 71 tests, tous PASS (dont rejeu historique bot = labo, qui demande l'historique du labo téléchargé) |
 | **Gardien journalier — étape 1** (signal en lecture seule) | **fait le 20/11** : `gardien.py` + page `/gardien/signal` ; parité exacte avec le labo testée ; aucun ordre |
 | **Gardien — étape 3** (portefeuille simulé) | **fait le 20/11** : enveloppe `GARDIEN_CAPITAL_EUR` (100 € simulés), ordres limit simulés 0,40 %, `/gardien/portefeuille` ; fichier en /tmp (non durable → étape 4) |
 | Webhook TradingView BUY/SELL | **désactivé le 20/11** (`WEBHOOK_TRADING_ENABLED=false`) : le gardien est le seul décideur ; PING fonctionne. Le script `tools/orion_test_dry_run.ps1` (ancien flux) n'est plus utile |
@@ -48,9 +48,9 @@ Deux circuits distincts :
 | **Gardien — étape 6** (essais virtuels) | **mode d'essai fait le 22/11** : `/gardien/essai?debut=AAAA-MM-JJ&fin=AAAA-MM-JJ` (+ `panne_debut`, `panne_jours`, `stop_atr`, `capital`) rejoue le VRAI code (signal + stop + portefeuille) sur le passé ; **page lisible `/gardien/essai/page`** (résumé, graphique, opérations, raccourcis, lisible sur téléphone) ; portefeuille d'essai séparé, aucun ordre. Historique fourni : `data/btceur_journalier.csv` (2020-2026) + Kraken. Reste : période de simulation en direct (plusieurs semaines) |
 | **Gardien — étape 2** (horloge + journal) | **fait le 20/11** : vérification toutes les heures, `/gardien/journal` (30 derniers jours + vérifications) ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
-| Persistance d'état / réconciliation Kraken | à faire (bloquant avant LIVE) |
+| Persistance d'état / réconciliation Kraken | persistance ✅ (étape 4) ; **réconciliation codée le 22/11** : `/gardien/reconciliation?secret=…` (lecture seule, protégée par WEBHOOK_SECRET) compare ORION ↔ Kraken (position, euros de l'enveloppe, stop posé, ordres inconnus) → OK / ATTENTION / BLOQUANT. Reste avant LIVE : la lancer automatiquement au démarrage et chaque heure, et bloquer les ordres en cas de BLOQUANT |
 | Anti-doublon persistant | à faire |
-| Version de ccxt | non fixée (`>=4.1.0,<5`) → **à fixer avant LIVE** (veille du 22/11) |
+| Version de ccxt | **figée le 22/11 : `ccxt==4.5.93`** (test de cohérence) |
 | `MAX_PRICE_DEVIATION_PCT` | variable présente, non branchée |
 | Plan Render | **Starter** (7 $/mois, 0,5 CPU, 512 Mo) : pas de mise en veille — point résolu le 11/11 |
 | Déploiement Render | automatique depuis `feature/orion-protocol-v1` (commit 11ff64e en ligne le 11/11 → correctif sizing déployé) |
@@ -123,6 +123,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **22/11/2026 (4)** — ccxt figé à 4.5.93. **Réconciliation Kraken** (lecture seule) : `/gardien/reconciliation`. Nécessite les droits « Requête des fonds » et
+  « Requête des ordres ouverts et des transactions » sur la clé. 71 tests.
 - **22/11/2026 (3)** — Essais vérifiés en ligne par le propriétaire (le rejeu 2024→aujourd'hui retrouve la vraie sortie du 06/11 à 67 989 €).
   Correctif : jours de panne affichés exactement. Nouvelle page `/gardien/essai/page`. 58 tests.
 - **22/11/2026 (2)** — Étape 5 en ligne. **Étape 6 : mode d'essai** `/gardien/essai` (rejeu du vrai code sur une période passée, panne simulable).
