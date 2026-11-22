@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action :** essais virtuels avec `/gardien/essai` et période de simulation en direct ; avant le réel : réconciliation Kraken, ccxt figé. Voir § 9.
+**Prochaine action :** tester `/gardien/reconciliation` (droits « Requête » sur la clé) ; puis réconciliation automatique (démarrage + chaque heure) et blocage des ordres si BLOQUANT. Voir § 9.
 
 ---
 
@@ -227,7 +227,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 
 - **Avant tout passage en réel :**
   - mémoire durable ;
-  - réconciliation entre Kraken et ORION ;
+  - réconciliation entre Kraken et ORION : contrôle manuel fait le 22/11, reste l'automatique + blocage ;
   - stop de protection posé chez Kraken ;
   - droit « Requête » sur la clé API ;
   - anti-doublon persistant ;
