@@ -118,3 +118,82 @@ def test_endpoint_requires_secret_and_never_orders(monkeypatch, tmp_path):
     monkeypatch.setattr(A, "_make_exchange", boom)
     j = cl.get("/gardien/reconciliation", headers={"X-Webhook-Token": "mot-de-passe-test"}).get_json()
     assert "Requête des fonds" in j["controles"][0]["detail"]
+
+
+class _FakeEx:
+    def __init__(self, balance, orders=(), fail=None):
+        self.balance, self.orders, self.fail, self.calls = balance, list(orders), fail, []
+
+    def fetch_balance(self):
+        if self.fail:
+            raise RuntimeError(self.fail)
+        self.calls.append("balance"); return self.balance
+
+    def fetch_open_orders(self, symbol):
+        self.calls.append(symbol); return self.orders
+
+    def __getattr__(self, name):
+        raise AssertionError(f"appel interdit : {name}")
+
+
+def _app(monkeypatch, tmp_path, dry_run="true", keys=True):
+    monkeypatch.setenv("STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setenv("DRY_RUN", dry_run)
+    monkeypatch.setenv("WEBHOOK_SECRET", "mdp")
+    if keys:
+        monkeypatch.setenv("KRAKEN_API_KEY", "k"); monkeypatch.setenv("KRAKEN_API_SECRET", "s")
+    else:
+        monkeypatch.delenv("KRAKEN_API_KEY", raising=False); monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+    sys.modules.pop("app", None)
+    import app as A
+    A._gardien_checks.clear()
+    return A
+
+
+def test_clock_runs_reconciliation_and_saves_it(monkeypatch, tmp_path):
+    from test_gardien import series
+    A = _app(monkeypatch, tmp_path)
+    fake = _FakeEx(bal(0, 2.0))
+    monkeypatch.setattr(A, "_make_exchange", lambda: fake)
+    monkeypatch.setattr(A.gardien, "fetch_daily_candles", lambda pair: series([400 - i for i in range(300)]))
+    e = A._gardien_tick()
+    assert e["reconciliation"] == "BLOQUANT" and fake.calls == ["balance", "BTC/EUR"]
+    pub = A.app.test_client().get("/health").get_json()["gardien_reconciliation"]
+    assert pub["verdict"] == "BLOQUANT" and pub["simulation"]
+    assert any("Euros" in c for c in pub["controles_non_ok"])
+    assert "2.00" not in str(pub)  # aucun montant sur les pages publiques
+    j = A.app.test_client().get("/gardien/journal").get_json()
+    assert j["reconciliation_kraken"]["verdict"] == "BLOQUANT"
+    last = A.app.test_client().get("/gardien/reconciliation?secret=mdp&derniere=1").get_json()
+    assert last["kraken_dit"]["eur_disponible"] == 2.0 and fake.calls == ["balance", "BTC/EUR"]  # pas de 2e appel
+
+
+def test_no_keys_no_reconciliation(monkeypatch, tmp_path):
+    from test_gardien import series
+    A = _app(monkeypatch, tmp_path, keys=False)
+    monkeypatch.setattr(A, "_make_exchange", lambda: (_ for _ in ()).throw(AssertionError("Kraken appelé")))
+    monkeypatch.setattr(A.gardien, "fetch_daily_candles", lambda pair: series([400 - i for i in range(300)]))
+    assert "reconciliation" not in A._gardien_tick()
+
+
+def test_real_orders_lock(monkeypatch, tmp_path):
+    # en simulation : toujours refusé
+    A = _app(monkeypatch, tmp_path, dry_run="true")
+    ok, why = A.gardien_real_orders_allowed()
+    assert not ok and "simulation" in why
+    # « réel » : refusé sans réconciliation, si BLOQUANT, si trop ancienne ; autorisé si OK et récente
+    A = _app(monkeypatch, tmp_path, dry_run="false")
+    assert A.gardien_real_orders_allowed() == (False, "aucune réconciliation avec Kraken n'a été faite")
+    monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(bal(0, 2.0)))
+    A._gardien_run_reconciliation()
+    ok, why = A.gardien_real_orders_allowed()
+    assert not ok and "BLOQUANTE" in why and "Euros" in why
+    monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(bal(0, 500.0)))
+    A._gardien_run_reconciliation()
+    ok, why = A.gardien_real_orders_allowed()
+    assert ok
+    import time as _t
+    assert A.gardien_real_orders_allowed(now=_t.time() + 3 * 3600)[0] is False  # trop ancienne
+    monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(None, fail="EGeneral:Permission denied"))
+    A._gardien_run_reconciliation()
+    assert A.gardien_real_orders_allowed()[0] is False  # accès refusé = bloquant

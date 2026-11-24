@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action :** tester `/gardien/reconciliation` (droits « Requête » sur la clé) ; puis réconciliation automatique (démarrage + chaque heure) et blocage des ordres si BLOQUANT. Voir § 9.
+**Prochaine action :** propriétaire : droits « Requête » sur la clé + premier contrôle `/gardien/reconciliation`. Claude : ordres réels préparés mais verrouillés (étape 7). Voir § 9.
 
 ---
 
@@ -181,7 +181,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | `pages/essai.html` | Page du mode d'essai |
 | `gardien_reconcile.py` | Réconciliation ORION ↔ Kraken (lecture seule) |
 | `data/btceur_journalier.csv` | Historique journalier BTC/EUR 2020-2026 pour le mode d'essai |
-| `tests/` | 71 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
+| `tests/` | 74 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
 | `lab/` | Laboratoire : données, moteur de backtest, stratégies, expériences, rapports dans `lab/results/` |
 | `docs/MEMORY_ORION.md` | Mémoire vivante, datée (fait foi) |
 | `docs/MEMORY_ORION_COMPLET.md` | Ce document : mémoire complète, pour reprendre de zéro |
@@ -227,7 +227,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 
 - **Avant tout passage en réel :**
   - mémoire durable ;
-  - réconciliation entre Kraken et ORION : contrôle manuel fait le 22/11, reste l'automatique + blocage ;
+  - réconciliation entre Kraken et ORION : ✅ manuelle (22/11) et automatique chaque heure + verrou des ordres réels (24/11) ;
   - stop de protection posé chez Kraken ;
   - droit « Requête » sur la clé API ;
   - anti-doublon persistant ;
@@ -307,4 +307,5 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 20/11 | **Option 1 choisie** (ORION calcule le signal). Gardien étapes 1, 2 et 3. EXP04a, EXP04b, EXP05. Frais Kraken officiels confirmés. Achat/vente par webhook TradingView désactivés |
 | 20/11 (soir) | Mémoire complète enregistrée dans le dépôt. **Disque persistant choisi** pour l'étape 4 ; code fait (portefeuille et journal relus au redémarrage, fichier abîmé mis de côté, jamais effacé) |
 | 22/11 | EXP06 (stop de protection). **Option A : suiveur 12 ATR**. Étape 5 codée en simulation + rejeu historique (bot = labo). Veille du 22/11 récupérée |
+| 24/11 | Réconciliation automatique (démarrage + chaque heure) et verrou des ordres réels |
 | 22/11 (soir) | Étape 5 en ligne. **Étape 6 : mode d'essai** `/gardien/essai` (périodes passées, panne simulable) |

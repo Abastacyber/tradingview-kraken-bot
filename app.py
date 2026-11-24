@@ -653,6 +653,8 @@ def health():
         "has_position": bool(st["has_position"]),
         "position_id": st.get("position_id"),
         "gardien_stockage_durable": _gardien_storage()["durable"],
+        "gardien_reconciliation": _gardien_reconciliation_public(),
+        "gardien_ordres_reels_autorises": gardien_real_orders_allowed()[0],
         "ts": int(time.time())
     }), 200
 
@@ -742,6 +744,12 @@ def _gardien_tick() -> Dict[str, Any]:
     except Exception as e:  # Kraken indisponible : on réessaiera à la prochaine vérification
         entry["erreur"] = str(e)[:200]
         log.warning("[GARDIEN] vérification impossible : %s", e)
+    if GARDIEN_RECONCILE_ENABLED and API_KEY and API_SECRET:  # réconciliation automatique (lecture seule)
+        try:
+            entry["reconciliation"] = _gardien_run_reconciliation()["verdict"]
+        except Exception as e:
+            entry["reconciliation"] = "ERREUR"
+            log.warning("[GARDIEN] réconciliation impossible : %s", e)
     _gardien_checks.append(entry)
     try:
         gardien_sim.save(GARDIEN_CHECKS_FILE, list(_gardien_checks))
@@ -863,24 +871,80 @@ def gardien_essai_page():
                      mimetype="text/html")
 
 
-@app.get("/gardien/reconciliation")
-def gardien_reconciliation():
-    """RÉCONCILIATION (lecture seule) : compare ce qu'ORION croit avoir à ce que Kraken indique (soldes, ordres ouverts).
-    Protégée par le mot de passe WEBHOOK_SECRET (?secret=... ou en-tête X-Webhook-Token) : elle affiche des soldes."""
-    tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
-    if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
-        return jsonify({"error": "unauthorized", "detail": "ajouter ?secret=<WEBHOOK_SECRET> à l'adresse"}), 401
+GARDIEN_RECONCILE_ENABLED = env_str("GARDIEN_RECONCILE_ENABLED", "true").lower() in ("1", "true", "yes")
+GARDIEN_RECONCILE_FILE = env_str("GARDIEN_RECONCILE_FILE", os.path.join(GARDIEN_DATA_DIR, "gardien_reconciliation.json"))
+GARDIEN_RECONCILE_MAX_AGE_SEC = env_int("GARDIEN_RECONCILE_MAX_AGE_SEC", 2 * 3600)  # au-delà : trop ancienne
+
+
+def _gardien_run_reconciliation() -> Dict[str, Any]:
+    """Réconciliation ORION ↔ Kraken (lecture seule). Le résultat est enregistré sur le disque : il sert de
+    VERROU pour les futurs ordres réels (voir gardien_real_orders_allowed) et il est visible par tous les processus."""
     with _gardien_pf_lock:
         pf = _gardien_portfolio()
     try:
         ex = _make_exchange()
         balance = ex.fetch_balance()
         orders = ex.fetch_open_orders("BTC/EUR")
+        out = gardien_reconcile.reconcile(pf, balance, orders, simulation=True)  # le gardien n'a pas encore de mode réel (étape 7)
     except Exception as e:  # droit manquant, clé refusée, réseau
-        log.warning("[GARDIEN] réconciliation impossible : %s", str(e)[:200])
-        return jsonify(gardien_reconcile.access_error(e)), 200
-    out = gardien_reconcile.reconcile(pf, balance, orders, simulation=True)  # le gardien n'a pas encore de mode réel
+        out = gardien_reconcile.access_error(e)
     out["verifie_a_utc"] = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
+    out["ts"] = time.time()
+    try:
+        gardien_sim.save(GARDIEN_RECONCILE_FILE, out)
+    except Exception as e:
+        log.warning("[GARDIEN] réconciliation non enregistrée : %s", e)
+    if out["verdict"] != "OK":
+        bad = [c["controle"] for c in out["controles"] if c["statut"] != "OK"]
+        log.warning("[GARDIEN] réconciliation %s : %s", out["verdict"], " ; ".join(bad))
+    return out
+
+
+def _gardien_reconciliation_public() -> Optional[Dict[str, Any]]:
+    """Résumé SANS montants (pour /health et /gardien/journal, pages non protégées)."""
+    last = gardien_sim.load(GARDIEN_RECONCILE_FILE)
+    if not isinstance(last, dict):
+        return None
+    return {"verdict": last.get("verdict"), "verifie_a_utc": last.get("verifie_a_utc"),
+            "controles_non_ok": [f"{c['controle']} : {c['statut']}" for c in last.get("controles", []) if c["statut"] != "OK"],
+            "simulation": "mode" in last}
+
+
+def gardien_real_orders_allowed(now: Optional[float] = None) -> Tuple[bool, str]:
+    """VERROU des futurs ordres réels du gardien (étape 7) : tout ordre réel devra d'abord appeler cette fonction.
+    Refus si : simulation (DRY_RUN), aucune réconciliation, réconciliation trop ancienne, ou verdict BLOQUANT."""
+    now = time.time() if now is None else now
+    if DRY_RUN:
+        return False, "simulation (DRY_RUN=true) : aucun ordre réel"
+    last = gardien_sim.load(GARDIEN_RECONCILE_FILE)
+    if not isinstance(last, dict) or "ts" not in last:
+        return False, "aucune réconciliation avec Kraken n'a été faite"
+    if now - float(last["ts"]) > GARDIEN_RECONCILE_MAX_AGE_SEC:
+        return False, "dernière réconciliation trop ancienne"
+    if last.get("verdict") == "BLOQUANT":
+        bad = [c["controle"] for c in last.get("controles", []) if c["statut"] == "BLOQUANT"]
+        return False, "réconciliation BLOQUANTE : " + " ; ".join(bad)
+    return True, f"réconciliation {last.get('verdict')} du {last.get('verifie_a_utc')}"
+
+
+@app.get("/gardien/reconciliation")
+def gardien_reconciliation():
+    """RÉCONCILIATION (lecture seule) : compare ce qu'ORION croit avoir à ce que Kraken indique (soldes, ordres ouverts).
+    Protégée par le mot de passe WEBHOOK_SECRET (?secret=... ou en-tête X-Webhook-Token) : elle affiche des soldes.
+    ?derniere=1 : affiche la dernière réconciliation automatique sans interroger Kraken."""
+    tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
+    if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
+        return jsonify({"error": "unauthorized", "detail": "ajouter ?secret=<WEBHOOK_SECRET> à l'adresse"}), 401
+    if request.args.get("derniere"):
+        last = gardien_sim.load(GARDIEN_RECONCILE_FILE)
+        out = last if isinstance(last, dict) else {"verdict": None, "detail": "aucune réconciliation enregistrée"}
+    else:
+        out = _gardien_run_reconciliation()
+    allowed, why = gardien_real_orders_allowed()
+    out = dict(out)
+    out["ordres_reels_autorises"] = {"autorise": allowed, "raison": why}
+    out["automatique"] = (f"au démarrage puis toutes les {GARDIEN_CLOCK_SEC // 60} min" if GARDIEN_RECONCILE_ENABLED
+                          else "désactivée (GARDIEN_RECONCILE_ENABLED=false)")
     return jsonify(out), 200
 
 
@@ -904,6 +968,7 @@ def gardien_journal():
         "horloge": {"active": GARDIEN_CLOCK_ENABLED, "verification_toutes_les_sec": GARDIEN_CLOCK_SEC,
                     "nb_verifications_enregistrees": len(checks)},
         "stockage": _gardien_storage(),
+        "reconciliation_kraken": _gardien_reconciliation_public(),
         "dernieres_verifications": checks[-24:][::-1],
         "derniers_jours": jours,
         "ordres": "aucun ordre réel (simulation)",
