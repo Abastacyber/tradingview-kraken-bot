@@ -16,6 +16,7 @@ import ccxt
 import gardien
 import gardien_sim
 import gardien_reconcile
+import gardien_live
 
 
 # ===== Helpers ENV =====
@@ -947,6 +948,53 @@ def gardien_reconciliation():
     out["automatique"] = (f"au démarrage puis toutes les {GARDIEN_CLOCK_SEC // 60} min" if GARDIEN_RECONCILE_ENABLED
                           else "désactivée (GARDIEN_RECONCILE_ENABLED=false)")
     return jsonify(out), 200
+
+
+GARDIEN_ORDRE_TEST_AUTORISE = env_str("GARDIEN_ORDRE_TEST_AUTORISE", "false").lower() in ("1", "true", "yes")
+GARDIEN_ORDRE_TEST_FILE = os.path.join(GARDIEN_DATA_DIR, "gardien_ordre_test.json")
+_ordre_test_lock = threading.Lock()
+
+
+@app.get("/gardien/ordre-test")
+def gardien_ordre_test():
+    """ORDRE-TEST (étape 7, préparation). Protégé par WEBHOOK_SECRET.
+    mode=validation (défaut) : Kraken examine achat, stop et vente SANS les exécuter — aucun argent ne bouge.
+    mode=reel&confirmer=OUI : petit aller-retour réel (≤ 20 €), seulement si GARDIEN_ORDRE_TEST_AUTORISE=true
+    sur Render (le GO du propriétaire). Un seul ordre-test réel toutes les 10 minutes (protection contre le double clic)."""
+    tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
+    if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
+        return jsonify({"error": "unauthorized", "detail": "mot de passe absent ou incorrect : ajouter ?secret=VOTRE_MOT_DE_PASSE"}), 401
+    mode = request.args.get("mode", "validation")
+    try:
+        eur = float(request.args.get("montant", "15"))
+    except ValueError:
+        return jsonify({"error": "montant invalide"}), 400
+    real = mode == "reel"
+    if real:
+        if not GARDIEN_ORDRE_TEST_AUTORISE:
+            return jsonify({"resultat": "REFUSÉ", "detail": "ordre-test réel non autorisé : le propriétaire doit régler "
+                            "GARDIEN_ORDRE_TEST_AUTORISE=true sur Render (son GO)"}), 403
+        if request.args.get("confirmer") != "OUI":
+            return jsonify({"resultat": "REFUSÉ", "detail": "ajouter &confirmer=OUI pour un ordre-test réel"}), 400
+    if not _ordre_test_lock.acquire(blocking=False):
+        return jsonify({"resultat": "REFUSÉ", "detail": "un ordre-test est déjà en cours"}), 409
+    try:
+        history = gardien_sim.load(GARDIEN_ORDRE_TEST_FILE) or []
+        last_real = max((h.get("ts", 0) for h in history if h.get("reel")), default=0)
+        if real and time.time() - last_real < 600:
+            return jsonify({"resultat": "REFUSÉ", "detail": "un ordre-test réel a déjà été passé il y a moins de 10 minutes"}), 409
+        try:
+            ex = _make_exchange()
+            out = gardien_live.test_round_trip(ex, eur, real=real)
+        except Exception as e:
+            out = {"resultat": "ÉCHEC", "detail": gardien_live.explain_kraken_error(e)}
+        out.update({"reel": real, "ts": time.time(), "le_utc": time.strftime("%Y-%m-%d %H:%M", time.gmtime())})
+        history.append(out)
+        gardien_sim.save(GARDIEN_ORDRE_TEST_FILE, history[-20:])
+        log.warning("[GARDIEN] ordre-test %s : %s", "RÉEL" if real else "validation", out.get("resultat"))
+        return jsonify(out), 200
+    finally:
+        _ordre_test_lock.release()
 
 
 @app.get("/gardien/journal")
