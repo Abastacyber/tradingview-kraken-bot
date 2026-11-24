@@ -197,3 +197,11 @@ def test_real_orders_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(None, fail="EGeneral:Permission denied"))
     A._gardien_run_reconciliation()
     assert A.gardien_real_orders_allowed()[0] is False  # accès refusé = bloquant
+
+
+def test_public_summary_says_simulation_even_when_access_fails(monkeypatch, tmp_path):
+    A = _app(monkeypatch, tmp_path, dry_run="true")
+    monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(None, fail="EGeneral:Permission denied"))
+    A._gardien_run_reconciliation()
+    pub = A.app.test_client().get("/health").get_json()["gardien_reconciliation"]
+    assert pub["simulation"] is True and pub["verdict"] == "BLOQUANT"

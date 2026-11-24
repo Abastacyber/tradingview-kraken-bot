@@ -907,7 +907,7 @@ def _gardien_reconciliation_public() -> Optional[Dict[str, Any]]:
         return None
     return {"verdict": last.get("verdict"), "verifie_a_utc": last.get("verifie_a_utc"),
             "controles_non_ok": [f"{c['controle']} : {c['statut']}" for c in last.get("controles", []) if c["statut"] != "OK"],
-            "simulation": "mode" in last}
+            "simulation": DRY_RUN}
 
 
 def gardien_real_orders_allowed(now: Optional[float] = None) -> Tuple[bool, str]:
