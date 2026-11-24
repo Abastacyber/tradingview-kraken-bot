@@ -654,6 +654,7 @@ def health():
         "has_position": bool(st["has_position"]),
         "position_id": st.get("position_id"),
         "gardien_stockage_durable": _gardien_storage()["durable"],
+        "gardien_mode": "RÉEL (ordres chez Kraken)" if GARDIEN_LIVE else "simulation",
         "gardien_reconciliation": _gardien_reconciliation_public(),
         "gardien_ordres_reels_autorises": gardien_real_orders_allowed()[0],
         "ts": int(time.time())
@@ -692,6 +693,18 @@ GARDIEN_STOP_ATR_K = env_float("GARDIEN_STOP_ATR_K", gardien.STOP_ATR_K)  # stop
 GARDIEN_STOP_FEE_PCT = env_float("GARDIEN_STOP_FEE_PCT", 0.008)   # sortie par stop = ordre taker 0,80 %
 GARDIEN_STOP_SLIP_PCT = env_float("GARDIEN_STOP_SLIP_PCT", 0.005)  # glissement prudent d'une vente par stop
 GARDIEN_STATE_FILE = env_str("GARDIEN_STATE_FILE", os.path.join(GARDIEN_DATA_DIR, "gardien_portefeuille.json"))
+# --- Étape 7 : gardien RÉEL. DOUBLE VERROU : DRY_RUN=false ET GARDIEN_REEL=true (réglés par le propriétaire = son GO) ---
+GARDIEN_REEL = env_str("GARDIEN_REEL", "false").lower() in ("1", "true", "yes")
+GARDIEN_LIVE = (not DRY_RUN) and GARDIEN_REEL
+GARDIEN_REEL_STATE_FILE = os.path.join(GARDIEN_DATA_DIR, "gardien_portefeuille_reel.json")
+GARDIEN_ACHAT_MAKER_HEURES = env_float("GARDIEN_ACHAT_MAKER_HEURES", 12.0)  # ensuite : ordre immédiat (taker)
+GARDIEN_VENTE_MAKER_HEURES = env_float("GARDIEN_VENTE_MAKER_HEURES", 3.0)
+_gardien_live_lock = threading.Lock()
+
+
+def _gardien_live_portfolio() -> Dict[str, Any]:
+    pf = gardien_sim.load(GARDIEN_REEL_STATE_FILE)
+    return pf if isinstance(pf, dict) else gardien_live.new_live_portfolio(GARDIEN_CAPITAL_EUR)
 _gardien_pf_lock = threading.Lock()
 
 
@@ -745,18 +758,47 @@ def _gardien_tick() -> Dict[str, Any]:
     except Exception as e:  # Kraken indisponible : on réessaiera à la prochaine vérification
         entry["erreur"] = str(e)[:200]
         log.warning("[GARDIEN] vérification impossible : %s", e)
-    if GARDIEN_RECONCILE_ENABLED and API_KEY and API_SECRET:  # réconciliation automatique (lecture seule)
+    rec = None
+    if (GARDIEN_RECONCILE_ENABLED or GARDIEN_LIVE) and API_KEY and API_SECRET:  # réconciliation (lecture seule)
         try:
-            entry["reconciliation"] = _gardien_run_reconciliation()["verdict"]
+            rec = _gardien_run_reconciliation()
+            entry["reconciliation"] = rec["verdict"]
         except Exception as e:
             entry["reconciliation"] = "ERREUR"
             log.warning("[GARDIEN] réconciliation impossible : %s", e)
+    if GARDIEN_LIVE and rec is not None and "erreur" not in entry:
+        _gardien_live_tick(entry, rec)
     _gardien_checks.append(entry)
     try:
         gardien_sim.save(GARDIEN_CHECKS_FILE, list(_gardien_checks))
     except Exception as e:
         log.warning("[GARDIEN] journal non enregistré : %s", e)
     return entry
+
+
+def _gardien_live_tick(entry: Dict[str, Any], rec: Dict[str, Any]) -> None:
+    """Gardien RÉEL : vrais ordres chez Kraken (achat/vente limit, stop posé et remonté).
+    Ouvrir une position exige le verrou complet ; se protéger exige seulement un accès Kraken et une position cohérente."""
+    bad = {c["controle"].split(" (")[0] for c in rec.get("controles", []) if c["statut"] == "BLOQUANT"}
+    can_protect = not ({"Accès Kraken", "Position BTC"} & bad)
+    can_open, why = gardien_real_orders_allowed()
+    try:
+        with _gardien_live_lock:
+            pf = _gardien_live_portfolio()
+            candles = _gardien_cache["candles"]
+            ops = gardien_live.live_step(
+                _make_exchange(), pf, _gardien_cache["data"], candles, gardien.atr(candles), GARDIEN_STOP_ATR_K,
+                can_open, can_protect, buy_hours=GARDIEN_ACHAT_MAKER_HEURES, sell_hours=GARDIEN_VENTE_MAKER_HEURES,
+                save=lambda p: gardien_sim.save(GARDIEN_REEL_STATE_FILE, p))
+            gardien_sim.save(GARDIEN_REEL_STATE_FILE, pf)
+        entry["ordres_reels"] = [o["type"] for o in ops] or "aucun"
+        if not can_open:
+            entry["verrou"] = why
+        for o in ops:
+            log.warning("[GARDIEN-REEL] %s @ %.2f (%.2f EUR)", o["type"], o["prix"], o.get("montant_eur", 0.0))
+    except Exception as e:
+        entry["erreur_reel"] = str(e)[:200]
+        log.error("[GARDIEN-REEL] étape impossible : %s", e)
 
 
 def _gardien_storage() -> Dict[str, Any]:
@@ -880,13 +922,17 @@ GARDIEN_RECONCILE_MAX_AGE_SEC = env_int("GARDIEN_RECONCILE_MAX_AGE_SEC", 2 * 360
 def _gardien_run_reconciliation() -> Dict[str, Any]:
     """Réconciliation ORION ↔ Kraken (lecture seule). Le résultat est enregistré sur le disque : il sert de
     VERROU pour les futurs ordres réels (voir gardien_real_orders_allowed) et il est visible par tous les processus."""
-    with _gardien_pf_lock:
-        pf = _gardien_portfolio()
+    if GARDIEN_LIVE:
+        with _gardien_live_lock:
+            pf = _gardien_live_portfolio()
+    else:
+        with _gardien_pf_lock:
+            pf = _gardien_portfolio()
     try:
         ex = _make_exchange()
         balance = ex.fetch_balance()
         orders = ex.fetch_open_orders("BTC/EUR")
-        out = gardien_reconcile.reconcile(pf, balance, orders, simulation=True)  # le gardien n'a pas encore de mode réel (étape 7)
+        out = gardien_reconcile.reconcile(pf, balance, orders, simulation=not GARDIEN_LIVE)
     except Exception as e:  # droit manquant, clé refusée, réseau
         out = gardien_reconcile.access_error(e)
     out["verifie_a_utc"] = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
@@ -918,6 +964,8 @@ def gardien_real_orders_allowed(now: Optional[float] = None) -> Tuple[bool, str]
     now = time.time() if now is None else now
     if DRY_RUN:
         return False, "simulation (DRY_RUN=true) : aucun ordre réel"
+    if not GARDIEN_REEL:
+        return False, "gardien réel non activé (GARDIEN_REEL=false) : aucun ordre réel"
     last = gardien_sim.load(GARDIEN_RECONCILE_FILE)
     if not isinstance(last, dict) or "ts" not in last:
         return False, "aucune réconciliation avec Kraken n'a été faite"
@@ -995,6 +1043,19 @@ def gardien_ordre_test():
         return jsonify(out), 200
     finally:
         _ordre_test_lock.release()
+
+
+@app.get("/gardien/portefeuille-reel")
+def gardien_portefeuille_reel():
+    """Portefeuille RÉEL du gardien (protégé par WEBHOOK_SECRET : montants réels)."""
+    tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
+    if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
+        return jsonify({"error": "unauthorized", "detail": "mot de passe absent ou incorrect : ajouter ?secret=VOTRE_MOT_DE_PASSE"}), 401
+    with _gardien_live_lock:
+        pf = _gardien_live_portfolio()
+    allowed, why = gardien_real_orders_allowed()
+    return jsonify({"mode": "RÉEL" if GARDIEN_LIVE else "inactif (simulation) — activé par DRY_RUN=false ET GARDIEN_REEL=true",
+                    "ouverture_de_position_autorisee": allowed, "raison": why, "portefeuille": pf}), 200
 
 
 @app.get("/gardien/journal")

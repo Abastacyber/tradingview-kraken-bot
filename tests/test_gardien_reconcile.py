@@ -136,9 +136,10 @@ class _FakeEx:
         raise AssertionError(f"appel interdit : {name}")
 
 
-def _app(monkeypatch, tmp_path, dry_run="true", keys=True):
+def _app(monkeypatch, tmp_path, dry_run="true", keys=True, reel="false"):
     monkeypatch.setenv("STATE_FILE", str(tmp_path / "s.json"))
     monkeypatch.setenv("DRY_RUN", dry_run)
+    monkeypatch.setenv("GARDIEN_REEL", reel)
     monkeypatch.setenv("WEBHOOK_SECRET", "mdp")
     if keys:
         monkeypatch.setenv("KRAKEN_API_KEY", "k"); monkeypatch.setenv("KRAKEN_API_SECRET", "s")
@@ -182,7 +183,10 @@ def test_real_orders_lock(monkeypatch, tmp_path):
     ok, why = A.gardien_real_orders_allowed()
     assert not ok and "simulation" in why
     # « réel » : refusé sans réconciliation, si BLOQUANT, si trop ancienne ; autorisé si OK et récente
-    A = _app(monkeypatch, tmp_path, dry_run="false")
+    A = _app(monkeypatch, tmp_path, dry_run="false")  # DRY_RUN=false seul ne suffit pas (double verrou)
+    ok, why = A.gardien_real_orders_allowed()
+    assert not ok and "GARDIEN_REEL" in why
+    A = _app(monkeypatch, tmp_path, dry_run="false", reel="true")
     assert A.gardien_real_orders_allowed() == (False, "aucune réconciliation avec Kraken n'a été faite")
     monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(bal(0, 2.0)))
     A._gardien_run_reconciliation()

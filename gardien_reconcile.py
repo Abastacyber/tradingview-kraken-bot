@@ -54,9 +54,13 @@ def reconcile(pf: dict, balance: dict, open_orders: List[dict], simulation: bool
 
     btc_total, btc_free = _bal(balance, "total", "BTC"), _bal(balance, "free", "BTC")
     eur_free, eur_total = _bal(balance, "free", "EUR"), _bal(balance, "total", "EUR")
+    pending = pf.get("ordre_en_cours") or {}
+    known = {pending.get("id"), pf.get("stop_order_id")} - {None}
     stops = [o for o in open_orders if _is_stop_sell(o)]
-    others = [o for o in open_orders if not _is_stop_sell(o)]
+    others = [o for o in open_orders if not _is_stop_sell(o) and o.get("id") not in known]
     in_pos = bool(pf.get("en_position"))
+    if pending.get("side") == "buy":
+        eur_free = eur_total  # les euros de l'achat en cours sont réservés par Kraken : c'est normal
     want_btc = _num(pf.get("btc"))
     stop_level = pf.get("stop_protection")
 
@@ -85,7 +89,9 @@ def reconcile(pf: dict, balance: dict, open_orders: List[dict], simulation: bool
                 f"enveloppe d'ORION : {need:.2f} € mais seulement {eur_free:.2f} € disponibles chez Kraken "
                 f"(il manquerait {need - eur_free:.2f} € pour acheter en réel)")
 
-    if in_pos:
+    if pending.get("side") == "sell":
+        add("Stop de protection", "ATTENTION", "vente en cours chez Kraken : le stop est retiré le temps de la vente")
+    elif in_pos:
         if not stop_level:
             add("Stop de protection", "ATTENTION",
                 "ORION n'a pas encore calculé son stop (il est posé après le premier jour clôturé suivant l'achat)")

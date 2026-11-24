@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action :** propriétaire : lancer l'ordre-test en VALIDATION. Claude : brancher les ordres automatiques du gardien derrière le verrou. Puis GO pour l'ordre-test réel. Voir § 9.
+**Prochaine action :** propriétaire : ordre-test en VALIDATION, puis (GO) ordre-test réel ; ensuite activation du gardien réel = `DRY_RUN=false` + `GARDIEN_REEL=true` + `GARDIEN_CAPITAL_EUR` + dépôt. Voir § 9.
 
 ---
 
@@ -92,6 +92,7 @@ Documents historiques : Google Drive, dossier **Projet ORION / PROJET ORION V1 /
 | `/gardien/journal` | Décisions des 30 derniers jours et vérifications récentes de l'horloge |
 | `/gardien/portefeuille` | Portefeuille **simulé** : enveloppe, euros, BTC, valeur, résultat net, frais, opérations, stop de protection |
 | `/gardien/reconciliation?secret=…` | **Réconciliation** ORION ↔ Kraken (lecture seule, protégée par le mot de passe WEBHOOK_SECRET) : soldes, stop posé, ordres inconnus → OK / ATTENTION / BLOQUANT |
+| `/gardien/portefeuille-reel?secret=…` | Portefeuille RÉEL du gardien (vide tant que le mode réel n'est pas activé) |
 | `/gardien/ordre-test?secret=…` | **Ordre-test** : par défaut VALIDATION (Kraken vérifie achat, stop, vente sans exécuter). Mode réel (`&mode=reel&confirmer=OUI`, ≤ 20 €) verrouillé par `GARDIEN_ORDRE_TEST_AUTORISE` |
 | `/gardien/essai/page` | **Mode d'essai, page lisible** : formulaire, raccourcis (mai 2021, 2022…), résumé, graphique gardien vs BTC, opérations |
 | `/gardien/essai` | **Mode d'essai** : rejoue le gardien sur une période passée. Ex. `/gardien/essai?debut=2021-04-01&fin=2021-08-01&panne_debut=2021-05-10&panne_jours=7` |
@@ -180,10 +181,10 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | `gardien.py` | Signal journalier en Python pur : EMA, rejeu de la règle, journal |
 | `gardien_sim.py` | Portefeuille simulé : enveloppe, ordres limit simulés, stop de protection, rejeu historique, mode d'essai |
 | `pages/essai.html` | Page du mode d'essai |
-| `gardien_live.py` | Vrais ordres Kraken (achat/vente limit, stop-loss) et ordre-test — verrouillés |
+| `gardien_live.py` | Vrais ordres Kraken (achat/vente limit, stop-loss), ordre-test et **gardien réel automatique** — verrouillés |
 | `gardien_reconcile.py` | Réconciliation ORION ↔ Kraken (lecture seule) |
 | `data/btceur_journalier.csv` | Historique journalier BTC/EUR 2020-2026 pour le mode d'essai |
-| `tests/` | 85 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
+| `tests/` | 98 tests automatiques (tous passent ; avant : 34 passent, 1 ignoré hors ligne : parité labo sur données réelles), **100 % hors ligne** (`pytest -q`) |
 | `lab/` | Laboratoire : données, moteur de backtest, stratégies, expériences, rapports dans `lab/results/` |
 | `docs/MEMORY_ORION.md` | Mémoire vivante, datée (fait foi) |
 | `docs/MEMORY_ORION_COMPLET.md` | Ce document : mémoire complète, pour reprendre de zéro |
@@ -209,6 +210,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 
 - **Sécurité :** `DRY_RUN=true` · `ENABLE_SHORTING=false` · `ALLOW_PAYLOAD_SYMBOL=false`.
 - **Secrets**, gérés dans Render uniquement : `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`, `WEBHOOK_SECRET`.
+- **Mode réel du gardien** (étape 7) : `GARDIEN_REEL=false` par défaut. Activation = `DRY_RUN=false` **et** `GARDIEN_REEL=true`. Délais maker : `GARDIEN_ACHAT_MAKER_HEURES=12`, `GARDIEN_VENTE_MAKER_HEURES=3`. Ordre-test réel : `GARDIEN_ORDRE_TEST_AUTORISE=true`.
 - **Gardien** (valeurs par défaut du code) :
   - `GARDIEN_CAPITAL_EUR=100` : enveloppe simulée ;
   - `GARDIEN_FEE_PCT=0.004` : frais par ordre ;
@@ -309,6 +311,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 20/11 | **Option 1 choisie** (ORION calcule le signal). Gardien étapes 1, 2 et 3. EXP04a, EXP04b, EXP05. Frais Kraken officiels confirmés. Achat/vente par webhook TradingView désactivés |
 | 20/11 (soir) | Mémoire complète enregistrée dans le dépôt. **Disque persistant choisi** pour l'étape 4 ; code fait (portefeuille et journal relus au redémarrage, fichier abîmé mis de côté, jamais effacé) |
 | 22/11 | EXP06 (stop de protection). **Option A : suiveur 12 ATR**. Étape 5 codée en simulation + rejeu historique (bot = labo). Veille du 22/11 récupérée |
+| 24/11 (nuit) | Ordres automatiques du gardien branchés, double verrou (DRY_RUN=false ET GARDIEN_REEL=true) |
 | 24/11 (soir) | « Requête » coché ; ordre-test préparé (validation sans argent, réel verrouillé) |
 | 24/11 | Réconciliation automatique (démarrage + chaque heure) et verrou des ordres réels |
 | 22/11 (soir) | Étape 5 en ligne. **Étape 6 : mode d'essai** `/gardien/essai` (périodes passées, panne simulable) |
