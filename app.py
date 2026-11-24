@@ -906,7 +906,8 @@ def _gardien_reconciliation_public() -> Optional[Dict[str, Any]]:
     if not isinstance(last, dict):
         return None
     return {"verdict": last.get("verdict"), "verifie_a_utc": last.get("verifie_a_utc"),
-            "controles_non_ok": [f"{c['controle']} : {c['statut']}" for c in last.get("controles", []) if c["statut"] != "OK"],
+            "controles_non_ok": [f"{c['controle']} : {c['statut']} — {gardien_reconcile.public_hint(c)}"
+                                 for c in last.get("controles", []) if c["statut"] != "OK"],
             "simulation": DRY_RUN}
 
 
@@ -934,7 +935,7 @@ def gardien_reconciliation():
     ?derniere=1 : affiche la dernière réconciliation automatique sans interroger Kraken."""
     tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
     if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
-        return jsonify({"error": "unauthorized", "detail": "ajouter ?secret=<WEBHOOK_SECRET> à l'adresse"}), 401
+        return jsonify({"error": "unauthorized", "detail": "mot de passe absent ou incorrect : ajouter ?secret=VOTRE_MOT_DE_PASSE (la valeur WEBHOOK_SECRET de Render) à l'adresse"}), 401
     if request.args.get("derniere"):
         last = gardien_sim.load(GARDIEN_RECONCILE_FILE)
         out = last if isinstance(last, dict) else {"verdict": None, "detail": "aucune réconciliation enregistrée"}

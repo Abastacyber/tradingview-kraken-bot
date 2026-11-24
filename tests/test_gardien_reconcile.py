@@ -205,3 +205,15 @@ def test_public_summary_says_simulation_even_when_access_fails(monkeypatch, tmp_
     A._gardien_run_reconciliation()
     pub = A.app.test_client().get("/health").get_json()["gardien_reconciliation"]
     assert pub["simulation"] is True and pub["verdict"] == "BLOQUANT"
+
+
+def test_public_summary_explains_cause_without_amounts(monkeypatch, tmp_path):
+    A = _app(monkeypatch, tmp_path, dry_run="true")
+    monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(None, fail="EGeneral:Permission denied"))
+    A._gardien_run_reconciliation()
+    pub = A.app.test_client().get("/health").get_json()["gardien_reconciliation"]
+    assert "Requête des fonds" in pub["controles_non_ok"][0]
+    monkeypatch.setattr(A, "_make_exchange", lambda: _FakeEx(bal(0, 0.0883)))
+    A._gardien_run_reconciliation()
+    txt = " ".join(A.app.test_client().get("/health").get_json()["gardien_reconciliation"]["controles_non_ok"])
+    assert "ne couvre pas l'enveloppe" in txt and "0.09" not in txt and "100" not in txt

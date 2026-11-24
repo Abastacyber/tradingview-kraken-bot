@@ -151,3 +151,22 @@ def access_error(exc: Exception) -> dict:
             "controles": [{"controle": "Accès Kraken (lecture des soldes et des ordres)", "statut": "BLOQUANT",
                            "detail": detail}],
             "erreur_kraken": msg[:200], "ordres": "aucun (lecture seule)"}
+
+
+# Explications SANS montant, pour les pages publiques (/health, /gardien/journal).
+_HINTS = {
+    "Position BTC": "Kraken détient moins de BTC qu'ORION ne le croit : ne rien faire avant d'avoir compris l'écart",
+    "BTC hors enveloppe": "du BTC est présent sur Kraken en dehors de l'enveloppe d'ORION ; il n'y touchera pas",
+    "Euros pour l'enveloppe": "le solde EUR de Kraken ne couvre pas l'enveloppe d'ORION (normal en simulation, avant le dépôt)",
+    "Stop de protection": "le stop de protection chez Kraken est absent, trop petit ou trop bas",
+    "Stops en double": "plusieurs ordres stop de vente sont ouverts : un seul est attendu",
+    "Stop orphelin": "un ordre stop est resté ouvert alors qu'ORION est en euros : à annuler",
+    "Autres ordres ouverts BTC/EUR": "des ordres BTC/EUR qu'ORION ne gère pas sont ouverts : vérifier qu'ils sont voulus",
+}
+
+
+def public_hint(check: dict) -> str:
+    """Cause en clair d'un contrôle non OK, sans aucun montant (l'accès Kraken n'en contient jamais)."""
+    if check.get("controle", "").startswith("Accès Kraken"):
+        return check.get("detail", "")
+    return _HINTS.get(check.get("controle", ""), "voir le détail sur /gardien/reconciliation (protégé)")
