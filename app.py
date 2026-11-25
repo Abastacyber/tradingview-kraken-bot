@@ -17,6 +17,7 @@ import gardien
 import gardien_sim
 import gardien_reconcile
 import gardien_live
+import notify
 
 
 # ===== Helpers ENV =====
@@ -655,6 +656,7 @@ def health():
         "position_id": st.get("position_id"),
         "gardien_stockage_durable": _gardien_storage()["durable"],
         "gardien_mode": "RÉEL (ordres chez Kraken)" if GARDIEN_LIVE else "simulation",
+        "notifications_telephone": bool(notify.topic()),
         "gardien_reconciliation": _gardien_reconciliation_public(),
         "gardien_ordres_reels_autorises": gardien_real_orders_allowed()[0],
         "ts": int(time.time())
@@ -749,6 +751,12 @@ def _gardien_tick() -> Dict[str, Any]:
         if previous and previous.get("position") and previous["position"] != entry["position"]:
             entry["evenement"] = f"CHANGEMENT : {previous['position']} -> {entry['position']}"
             log.warning("[GARDIEN] %s (jour %s)", entry["evenement"], entry["jour_cloture_utc"])
+            achat = entry["position"].startswith("ACHETEUR")
+            notify.send("📈 Signal du gardien : ACHETEUR" if achat else "📉 Signal du gardien : EN EUROS",
+                        f"Clôture du {entry['jour_cloture_utc']} : {entry['cloture']:.0f} €. "
+                        + ("ORION achète maintenant (mode réel)." if achat and GARDIEN_LIVE else
+                           "ORION vend maintenant (mode réel)." if GARDIEN_LIVE else "Mode simulation : aucun ordre réel."),
+                        4, ["chart_with_upwards_trend" if achat else "chart_with_downwards_trend"])
         elif not previous or previous.get("jour_cloture_utc") != entry["jour_cloture_utc"]:
             entry["evenement"] = "nouveau jour clôturé"
             log.info("[GARDIEN] jour %s : %s (clôture %.0f)", entry["jour_cloture_utc"], entry["position"], entry["cloture"])
@@ -758,11 +766,23 @@ def _gardien_tick() -> Dict[str, Any]:
     except Exception as e:  # Kraken indisponible : on réessaiera à la prochaine vérification
         entry["erreur"] = str(e)[:200]
         log.warning("[GARDIEN] vérification impossible : %s", e)
+    _notify_on_change("erreur_signal", "erreur" in entry,
+                      "⚠️ ORION ne lit plus les prix Kraken" if "erreur" in entry else "✅ ORION lit de nouveau les prix",
+                      entry.get("erreur", "Les vérifications horaires fonctionnent à nouveau."), 4 if "erreur" in entry else 2,
+                      ["warning"] if "erreur" in entry else ["white_check_mark"])
     rec = None
     if (GARDIEN_RECONCILE_ENABLED or GARDIEN_LIVE) and API_KEY and API_SECRET:  # réconciliation (lecture seule)
         try:
             rec = _gardien_run_reconciliation()
             entry["reconciliation"] = rec["verdict"]
+            bad = [f"{c['controle']} : {gardien_reconcile.public_hint(c)}" for c in rec.get("controles", []) if c["statut"] != "OK"]
+            _notify_on_change("reconciliation", rec["verdict"],
+                              {"OK": "✅ Compte Kraken vérifié : tout concorde",
+                               "ATTENTION": "🟠 Compte Kraken : point à regarder",
+                               "BLOQUANT": "🔴 Compte Kraken : BLOQUANT (ORION n'achète plus)"}.get(rec["verdict"], "ORION"),
+                              " / ".join(bad) or "Plus aucun problème détecté.",
+                              5 if rec["verdict"] == "BLOQUANT" else 3,
+                              ["red_circle"] if rec["verdict"] == "BLOQUANT" else None)
         except Exception as e:
             entry["reconciliation"] = "ERREUR"
             log.warning("[GARDIEN] réconciliation impossible : %s", e)
@@ -785,6 +805,7 @@ def _gardien_live_tick(entry: Dict[str, Any], rec: Dict[str, Any]) -> None:
     try:
         with _gardien_live_lock:
             pf = _gardien_live_portfolio()
+            seen = {(e.get("le_utc"), e.get("detail")) for e in pf.get("evenements", [])}
             candles = _gardien_cache["candles"]
             ops = gardien_live.live_step(
                 _make_exchange(), pf, _gardien_cache["data"], candles, gardien.atr(candles), GARDIEN_STOP_ATR_K,
@@ -796,9 +817,36 @@ def _gardien_live_tick(entry: Dict[str, Any], rec: Dict[str, Any]) -> None:
             entry["verrou"] = why
         for o in ops:
             log.warning("[GARDIEN-REEL] %s @ %.2f (%.2f EUR)", o["type"], o["prix"], o.get("montant_eur", 0.0))
+            notify.send(*notify.for_operation(o))
+        for ev in pf.get("evenements", []):
+            if (ev.get("le_utc"), ev.get("detail")) not in seen:
+                msg = notify.for_event(ev.get("detail", ""))
+                if msg:
+                    notify.send(*msg)
+        _notify_on_change("erreur_reel", False, "✅ Gardien réel : de nouveau opérationnel", "Plus d'erreur.", 2)
     except Exception as e:
         entry["erreur_reel"] = str(e)[:200]
         log.error("[GARDIEN-REEL] étape impossible : %s", e)
+        _notify_on_change("erreur_reel", True, "⚠️ Gardien réel : étape impossible", str(e)[:300], 5, ["warning"])
+
+
+GARDIEN_NOTIF_FILE = os.path.join(GARDIEN_DATA_DIR, "gardien_notif_etat.json")
+
+
+def _notify_on_change(key: str, value: Any, title: str, message: str, priority: int = 3, tags=None) -> None:
+    """Notifie seulement quand la valeur CHANGE (pas toutes les heures)."""
+    try:
+        st = gardien_sim.load(GARDIEN_NOTIF_FILE)
+        st = st if isinstance(st, dict) else {}
+        if st.get(key) == value:
+            return
+        first = key not in st
+        st[key] = value
+        gardien_sim.save(GARDIEN_NOTIF_FILE, st)
+        if not (first and value in ("OK", False, None)):  # pas de « tout va bien » au tout premier passage
+            notify.send(title, message, priority, tags)
+    except Exception as e:
+        log.warning("[NOTIF] %s", e)
 
 
 def _gardien_storage() -> Dict[str, Any]:
@@ -819,6 +867,8 @@ def _start_gardien_clock():
     if GARDIEN_CLOCK_ENABLED and not _gardien_clock_started:
         _gardien_clock_started = True
         threading.Thread(target=_gardien_clock_loop, name="gardien-clock", daemon=True).start()
+        if GARDIEN_LIVE:
+            notify.send("ORION redémarré (mode RÉEL)", "Le gardien reprend ses vérifications horaires.", 1, ["arrows_counterclockwise"])
         log.info("[GARDIEN] horloge démarrée (toutes les %s s)", GARDIEN_CLOCK_SEC)
 
 
@@ -1056,6 +1106,18 @@ def gardien_portefeuille_reel():
     allowed, why = gardien_real_orders_allowed()
     return jsonify({"mode": "RÉEL" if GARDIEN_LIVE else "inactif (simulation) — activé par DRY_RUN=false ET GARDIEN_REEL=true",
                     "ouverture_de_position_autorisee": allowed, "raison": why, "portefeuille": pf}), 200
+
+
+@app.get("/gardien/notif-test")
+def gardien_notif_test():
+    """Envoie une notification d'essai sur le téléphone (protégé par WEBHOOK_SECRET)."""
+    tok = request.args.get("secret") or request.headers.get("X-Webhook-Token") or ""
+    if not WEBHOOK_SECRET or not hmac.compare_digest(str(tok), str(WEBHOOK_SECRET)):
+        return jsonify({"error": "unauthorized", "detail": "mot de passe absent ou incorrect : ajouter ?secret=VOTRE_MOT_DE_PASSE"}), 401
+    if not notify.topic():
+        return jsonify({"envoye": False, "detail": "NTFY_TOPIC n'est pas réglé sur Render"}), 200
+    ok = notify.send("🔔 Test ORION", "Si vous lisez ceci, les notifications d'ORION fonctionnent.", 3, ["bell"], wait=True)
+    return jsonify({"envoye": ok, "detail": "notification envoyée" if ok else "ntfy n'a pas accepté l'envoi (voir les journaux)"}), 200
 
 
 @app.get("/gardien/journal")
