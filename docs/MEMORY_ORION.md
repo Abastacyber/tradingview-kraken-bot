@@ -1,6 +1,6 @@
 # ORION — MÉMOIRE VIVANTE
 
-**Dernière mise à jour : 24/11/2026**
+**Dernière mise à jour : 25/11/2026**
 **Statut : DRY_RUN uniquement — LIVE verrouillé**
 
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
@@ -47,6 +47,7 @@ Deux circuits distincts :
 | **Gardien — étape 5** (stop de protection, SIMULÉ) | **en ligne le 22/11** (option A, EXP06) : stop suiveur = plus haut depuis l'achat − 12 × ATR14 journalier, jamais redescendu ; vente simulée taker 0,80 % + 0,50 % de glissement ; rattrapage des jours manqués (panne) ; contrôle horaire du plus bas du jour Kraken. **Rejeu historique** : le code du bot retrouve exactement les trades du labo (BTC et ETH, 12 et 3 ATR). Visible sur `/gardien/portefeuille`. Aucun ordre réel |
 | **Gardien — étape 6** (essais virtuels) | **mode d'essai fait le 22/11** : `/gardien/essai?debut=AAAA-MM-JJ&fin=AAAA-MM-JJ` (+ `panne_debut`, `panne_jours`, `stop_atr`, `capital`) rejoue le VRAI code (signal + stop + portefeuille) sur le passé ; **page lisible `/gardien/essai/page`** (résumé, graphique, opérations, raccourcis, lisible sur téléphone) ; portefeuille d'essai séparé, aucun ordre. Historique fourni : `data/btceur_journalier.csv` (2020-2026) + Kraken. Reste : période de simulation en direct (plusieurs semaines) |
 | **Gardien — étape 7 (préparation)** | **24/11** : `gardien_live.py` sait passer achat limit, vente limit et stop « stop-loss » chez Kraken (vérifié contre le vrai ccxt). **Ordre-test** `/gardien/ordre-test?secret=…` : mode **validation** (Kraken examine achat/stop/vente sans exécuter, aucun argent) utilisable maintenant ; mode **réel** (aller-retour ≤ 20 €, stop posé puis retiré) VERROUILLÉ tant que `GARDIEN_ORDRE_TEST_AUTORISE=true` n'est pas réglé sur Render (GO du propriétaire) + `&confirmer=OUI`, 1 fois / 10 min. **Ordres AUTOMATIQUES branchés le 24/11** (gardien réel) derrière un **DOUBLE VERROU** : `DRY_RUN=false` **ET** `GARDIEN_REEL=true` (GO du propriétaire), + réconciliation fraîche non BLOQUANTE pour ouvrir une position (se protéger — stop, vente — reste permis si Kraken est lisible et la position concorde). Achat/vente en limit maker au meilleur prix, replacés chaque heure ; passage en ordre immédiat après 12 h (achat) / 3 h (vente) — **délais opérationnels choisis par Claude, à valider pendant le micro-réel** (`GARDIEN_ACHAT_MAKER_HEURES`, `GARDIEN_VENTE_MAKER_HEURES`). Stop 12 ATR posé chez Kraken et remonté (retirer puis reposer). Enregistrement immédiat après chaque action. Portefeuille réel séparé (`gardien_portefeuille_reel.json`, enveloppe = `GARDIEN_CAPITAL_EUR`), page protégée `/gardien/portefeuille-reel?secret=…`. `/health` affiche `gardien_mode` |
+| **Ordre-test VALIDATION** | ✅ **25/11** : achat, stop et vente acceptés par Kraken (non exécutés) |
 | **Gardien — étape 2** (horloge + journal) | **fait le 20/11** : vérification toutes les heures, `/gardien/journal` (30 derniers jours + vérifications) ; aucun ordre |
 | Laboratoire de backtest | créé le 10/11 (`lab/`), première expérience faite |
 | Persistance d'état / réconciliation Kraken | persistance ✅ (étape 4) ; **réconciliation codée le 22/11** : `/gardien/reconciliation?secret=…` (lecture seule, protégée par WEBHOOK_SECRET) compare ORION ↔ Kraken (position, euros de l'enveloppe, stop posé, ordres inconnus) → OK / ATTENTION / BLOQUANT. **Automatique depuis le 24/11** : au démarrage puis chaque heure (si clés présentes), résultat enregistré sur le disque, résumé sans montants dans `/health` et `/gardien/journal`. **Verrou** `gardien_real_orders_allowed()` : refuse tout ordre réel si simulation, pas de réconciliation, réconciliation > 2 h ou BLOQUANT — à appeler par les ordres réels de l'étape 7 (il n'y en a pas encore) |
@@ -124,6 +125,9 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026** — Nouveau WEBHOOK_SECRET réglé par le propriétaire. **Ordre-test en VALIDATION : OK** (12:10 UTC) : Kraken accepte l'achat limit
+  (0,00027808 BTC à 53 512,7 € ≈ 14,88 € + frais ≤ 15 €), le stop-loss et la vente, sans exécution. Note : la validation Kraken n'a pas contrôlé les fonds
+  (0,09 € sur le compte) → les fonds seront vérifiés par l'ordre-test réel. Prochaine étape : dépôt ≈ 20 € + GARDIEN_ORDRE_TEST_AUTORISE=true (GO).
 - **24/11/2026 (3)** — **Ordres automatiques du gardien branchés**, verrouillés (DRY_RUN=false ET GARDIEN_REEL=true). Aucun ordre réel tant que le propriétaire ne règle pas les deux. 98 tests.
 - **24/11/2026 (2)** — « Requête » coché par le propriétaire. Cause en clair sur `/health`. **Ordre-test** préparé (validation sans argent ; réel verrouillé). 85 tests.
   Délai annoncé au propriétaire pour un premier vrai ordre : 1 à 2 semaines avec l'ordre-test ; les achats du gardien dépendent ensuite du marché.

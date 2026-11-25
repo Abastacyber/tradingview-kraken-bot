@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action :** propriétaire : ordre-test en VALIDATION, puis (GO) ordre-test réel ; ensuite activation du gardien réel = `DRY_RUN=false` + `GARDIEN_REEL=true` + `GARDIEN_CAPITAL_EUR` + dépôt. Voir § 9.
+**Prochaine action :** propriétaire : (validation ✅ 25/11) GO pour l'ordre-test réel (dépôt ≈ 20 €) ; ensuite activation du gardien réel = `DRY_RUN=false` + `GARDIEN_REEL=true` + `GARDIEN_CAPITAL_EUR` + dépôt. Voir § 9.
 
 ---
 
@@ -311,6 +311,7 @@ Année par année (BTC, frais 0,40 %) : le gardien a fait **0 % en 2022** contre
 | 20/11 | **Option 1 choisie** (ORION calcule le signal). Gardien étapes 1, 2 et 3. EXP04a, EXP04b, EXP05. Frais Kraken officiels confirmés. Achat/vente par webhook TradingView désactivés |
 | 20/11 (soir) | Mémoire complète enregistrée dans le dépôt. **Disque persistant choisi** pour l'étape 4 ; code fait (portefeuille et journal relus au redémarrage, fichier abîmé mis de côté, jamais effacé) |
 | 22/11 | EXP06 (stop de protection). **Option A : suiveur 12 ATR**. Étape 5 codée en simulation + rejeu historique (bot = labo). Veille du 22/11 récupérée |
+| 25/11 | Nouveau mot de passe WEBHOOK_SECRET ; **ordre-test en validation OK** (achat, stop, vente acceptés par Kraken, rien exécuté) |
 | 24/11 (nuit) | Ordres automatiques du gardien branchés, double verrou (DRY_RUN=false ET GARDIEN_REEL=true) |
 | 24/11 (soir) | « Requête » coché ; ordre-test préparé (validation sans argent, réel verrouillé) |
 | 24/11 | Réconciliation automatique (démarrage + chaque heure) et verrou des ordres réels |
