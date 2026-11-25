@@ -127,6 +127,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (8)** — **Pine « ORION Gardien v1.1 » installé** sur TradingView par le propriétaire (BTCEUR Kraken). Version sécurisée : n'affiche
+  rien hors bougies d'1 jour (confusion 1m/5m évitée). Tableau en 1D : EN EUROS, 21,2 % à monter, cohérent avec ORION. Reste : alertes « une fois par clôture ».
 - **25/11/2026 (7)** — Anciens scripts TradingView relus : « Scalp Suiveur — KR Scalping v3.1 » (BTC/EUR, 15 min, EMA9/21+RSI+BB, webhooks vers Render)
   = obsolète (perdant net de frais, EXP01 ; webhooks ignorés depuis le 20/11) et contient un ANCIEN mot de passe webhook en clair (plus valable sur Render) ;
   « AFYH GOLD » (XAUUSD, eToro levier 20, signaux manuels) = projet séparé. Le document « TV_Render_Phemex_BusinessPlan » est en fait un ancien app.py.
