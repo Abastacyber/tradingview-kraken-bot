@@ -15,7 +15,7 @@ Il complète la mémoire vivante `docs/MEMORY_ORION.md`, mise à jour à chaque 
 3. Écrire :
    > Reprends le projet ORION : lis CLAUDE.md et docs/MEMORY_ORION.md, récupère la dernière veille, puis fais-moi le point.
 
-**Prochaine action :** propriétaire : (validation ✅, ordre-test réel ✅ 25/11) remettre GARDIEN_ORDRE_TEST_AUTORISE=false ; choisir l'enveloppe ; ensuite activation du gardien réel = `DRY_RUN=false` + `GARDIEN_REEL=true` + `GARDIEN_CAPITAL_EUR` + dépôt. Voir § 9.
+**Prochaine action :** propriétaire : (validation ✅, ordre-test réel ✅ 25/11) remettre GARDIEN_ORDRE_TEST_AUTORISE=false ; **enveloppe choisie le 25/11 : 20 € (option A)** ; ensuite activation du gardien réel = `DRY_RUN=false` + `GARDIEN_REEL=true` + `GARDIEN_CAPITAL_EUR` + dépôt. Voir § 9.
 
 ---
 

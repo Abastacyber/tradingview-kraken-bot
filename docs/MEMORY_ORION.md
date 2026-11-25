@@ -127,6 +127,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (4)** — **Décision du propriétaire : option A, enveloppe réelle de 20 €** (sans nouveau dépôt, ≈ 21,32 € sur Kraken).
+  Activation = GO du propriétaire en réglant sur Render : GARDIEN_CAPITAL_EUR=20, GARDIEN_REEL=true, DRY_RUN=false (et GARDIEN_ORDRE_TEST_AUTORISE=false).
 - **25/11/2026 (3)** — Clé Kraken et WEBHOOK_SECRET renouvelés. Validation OK (13:41 UTC). **ORDRE-TEST RÉEL RÉUSSI (13:48 UTC)** : achat 0,00027884 BTC
   pour 14,85 € (limit au ask +0,2 % → exécuté au prix du carnet ≈ 53 256 €), stop posé chez Kraken puis retiré, vente 14,85 € ; frais 0,11879 € × 2
   = **0,80 % taker confirmé en réel**, coût total ≈ 0,24 €. Chaîne complète ORION → Kraken validée avec de l'argent réel.
