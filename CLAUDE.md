@@ -16,6 +16,9 @@
    n'a PAS le droit d'écrire sur GitHub : son rapport complet est le dernier message de sa session.
    → `get_trigger` (outils claude-code-remote) → `last_run.session_id` → `list_events` (kinds assistant)
    → enregistrer le rapport dans `docs/veille/VEILLE_AAAA-MM-JJ.md` et ajouter une ligne datée dans la mémoire.
+   Autre tâche programmée : rappel unique le 15/01/2027 (`trig_01QmCxQtv1ZUphsgCVjyQowt`) ; son rapport se récupère de la même façon.
+4. ORION tourne EN RÉEL depuis le 25/11/2026 (enveloppe 20 €) : limiter les envois sur `feature/orion-protocol-v1` (chaque envoi redémarre le bot) ;
+   tester avant tout envoi ; toute modification des ordres réels = Effort « Élevé » et accord du propriétaire.
 
 ## À la fin de chaque séance
 - Mettre à jour `docs/MEMORY_ORION.md` : ligne « Dernière mise à jour : JJ/MM/AAAA »,

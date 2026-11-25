@@ -127,6 +127,9 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (9)** — Alertes TradingView impossibles (forfait Basic : 0 alerte technique). À la place : (1) la veille hebdomadaire (dimanche 19h36,
+  notification téléphone) signale désormais en tête « ⚠ SIGNAL D'ACHAT PROCHE OU ACTIF » si les conditions sont à moins de 5 % ; (2) tâche programmée
+  « Rappel ORION : alerte TradingView et point gardien » (`trig_01QmCxQtv1ZUphsgCVjyQowt`) le **15/01/2027 à 10h** (Paris), notification téléphone.
 - **25/11/2026 (8)** — **Pine « ORION Gardien v1.1 » installé** sur TradingView par le propriétaire (BTCEUR Kraken). Version sécurisée : n'affiche
   rien hors bougies d'1 jour (confusion 1m/5m évitée). Tableau en 1D : EN EUROS, 21,2 % à monter, cohérent avec ORION. Reste : alertes « une fois par clôture ».
 - **25/11/2026 (7)** — Anciens scripts TradingView relus : « Scalp Suiveur — KR Scalping v3.1 » (BTC/EUR, 15 min, EMA9/21+RSI+BB, webhooks vers Render)
