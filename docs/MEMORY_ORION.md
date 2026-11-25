@@ -1,7 +1,7 @@
 # ORION — MÉMOIRE VIVANTE
 
 **Dernière mise à jour : 25/11/2026**
-**Statut : DRY_RUN uniquement — LIVE verrouillé**
+**Statut : GARDIEN RÉEL actif depuis le 25/11/2026 (enveloppe 20 €) — en euros, en attente du signal d'achat**
 
 Ce fichier est LA mémoire du projet. Il est mis à jour (avec la date) à chaque séance de travail.
 Historique long et philosophie : Bible ORION sur Google Drive (dossier « PROJECT ORION BIBLE »).
@@ -35,7 +35,7 @@ Deux circuits distincts :
 
 | Élément | État |
 |---|---|
-| Service Render `tv-krkn-bot-v2` | en ligne, DRY_RUN=true |
+| Service Render `tv-krkn-bot-v2` | en ligne, **MODE RÉEL depuis le 25/11/2026 16:24 UTC** (DRY_RUN=false, GARDIEN_REEL=true, enveloppe 20 €) |
 | Branche de travail GitHub | `feature/orion-protocol-v1` |
 | Sizing DRY_RUN (bug 25 € → 0.00005 BTC) | corrigé ; **test réel PASS le 11/11** : 25 € → 0,00037217 BTC à 67 071 €, sizing_source=dry_run_virtual, stop Pine 3,03 %, SELL + nettoyage d'état OK |
 | `render.yaml` DRY_RUN=false (danger) | corrigé le 10/11 → `true` |
@@ -127,6 +127,10 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (5)** — **GO du propriétaire : gardien RÉEL activé** (16:24 UTC). /health : mode RÉEL, réconciliation OK, ordres autorisés.
+  Mesure (2020→2026) : depuis un état « en euros et prix ≥ 15 % sous l'EMA200 » (aujourd'hui −17 %), attente avant le prochain achat :
+  min 9 j, **médiane 140 j**, quartiles 60-190 j, max 273 j. Gardien investi 52 % du temps, 2,7 achats/an. ETH et BNB aussi en euros.
+  Inquiétude du propriétaire sur la faible fréquence (habitué au scalping) → pistes labo proposées : gardien « baissier » (vente à découvert), taille selon volatilité.
 - **25/11/2026 (4)** — **Décision du propriétaire : option A, enveloppe réelle de 20 €** (sans nouveau dépôt, ≈ 21,32 € sur Kraken).
   Activation = GO du propriétaire en réglant sur Render : GARDIEN_CAPITAL_EUR=20, GARDIEN_REEL=true, DRY_RUN=false (et GARDIEN_ORDRE_TEST_AUTORISE=false).
 - **25/11/2026 (3)** — Clé Kraken et WEBHOOK_SECRET renouvelés. Validation OK (13:41 UTC). **ORDRE-TEST RÉEL RÉUSSI (13:48 UTC)** : achat 0,00027884 BTC
