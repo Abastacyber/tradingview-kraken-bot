@@ -127,6 +127,8 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (6)** — Pine Script « ORION Gardien v1 » écrit (`tradingview/orion_gardien_v1.pine`) : affichage des EMA, achats/ventes/stop et alertes
+  de notification (aucun ordre, aucun webhook). Non compilé côté Claude (pas de compilateur Pine) : à vérifier par le propriétaire dans TradingView.
 - **25/11/2026 (5)** — **GO du propriétaire : gardien RÉEL activé** (16:24 UTC). /health : mode RÉEL, réconciliation OK, ordres autorisés.
   Mesure (2020→2026) : depuis un état « en euros et prix ≥ 15 % sous l'EMA200 » (aujourd'hui −17 %), attente avant le prochain achat :
   min 9 j, **médiane 140 j**, quartiles 60-190 j, max 273 j. Gardien investi 52 % du temps, 2,7 achats/an. ETH et BNB aussi en euros.
