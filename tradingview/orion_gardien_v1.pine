@@ -3,16 +3,19 @@
 //   ACHAT  : EMA20 > EMA50 ET clôture > EMA200 (journalier) → exécuté à l'ouverture du lendemain
 //   VENTE  : EMA20 < EMA50 → exécutée à l'ouverture du lendemain
 //   STOP   : plus haut depuis l'achat − 12 × ATR14, remonté chaque jour, jamais redescendu
-// À utiliser sur le graphique KRAKEN BTC/EUR, unité de temps 1 jour (1D).
+// À utiliser sur le graphique KRAKEN BTC/EUR, unité de temps 1 jour (D).
+// SÉCURITÉ : sur toute autre unité de temps, le script n'affiche rien et ne déclenche aucune alerte.
 // Ce script n'envoie AUCUN ordre : il affiche et peut prévenir (alertes). Le décideur reste ORION.
 //@version=6
-indicator("ORION Gardien v1", overlay = true, max_labels_count = 500)
+indicator("ORION Gardien v1.1", overlay = true, max_labels_count = 500)
 
 fastLen  = input.int(20, "EMA rapide")
 slowLen  = input.int(50, "EMA lente")
 trendLen = input.int(200, "EMA de tendance")
 atrMult  = input.float(12.0, "Stop de protection (× ATR14)")
 showStop = input.bool(true, "Afficher le stop de protection")
+
+isDaily = timeframe.isdaily and timeframe.multiplier == 1  // uniquement des bougies d'UN jour
 
 e20  = ta.ema(close, fastLen)
 e50  = ta.ema(close, slowLen)
@@ -30,51 +33,58 @@ var float stopLevel   = na
 bool newBuySignal  = false
 bool newSellSignal = false
 
-// 1) ordres décidés la veille, exécutés à l'ouverture
-if pendingBuy
-    inPos      := true
-    maxHigh    := open
-    stopLevel  := na
-    pendingBuy := false
-    label.new(bar_index, low, "ACHAT", style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, size = size.small)
-if pendingSell
-    inPos       := false
-    pendingSell := false
-    stopLevel   := na
-    label.new(bar_index, high, "VENTE", style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+if isDaily
+    // 1) ordres décidés la veille, exécutés à l'ouverture
+    if pendingBuy
+        inPos      := true
+        maxHigh    := open
+        stopLevel  := na
+        pendingBuy := false
+        label.new(bar_index, low, "ACHAT", style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, size = size.small)
+    if pendingSell
+        inPos       := false
+        pendingSell := false
+        stopLevel   := na
+        label.new(bar_index, high, "VENTE", style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
 
-// 2) stop de protection touché pendant la journée (stop de la veille)
-if inPos and not na(stopLevel) and low <= stopLevel
-    inPos := false
-    label.new(bar_index, high, "STOP", style = label.style_label_down, color = color.new(color.orange, 0), textcolor = color.white, size = size.small)
-    stopLevel := na
+    // 2) stop de protection touché pendant la journée (stop de la veille)
+    if inPos and not na(stopLevel) and low <= stopLevel
+        inPos := false
+        label.new(bar_index, high, "STOP", style = label.style_label_down, color = color.new(color.orange, 0), textcolor = color.white, size = size.small)
+        stopLevel := na
 
-// 3) remontée du stop à la clôture (jamais vers le bas)
-if inPos
-    maxHigh   := math.max(maxHigh, high)
-    newStop    = maxHigh - atrMult * atr
-    stopLevel := na(stopLevel) ? newStop : math.max(stopLevel, newStop)
+    // 3) remontée du stop à la clôture (jamais vers le bas)
+    if inPos
+        maxHigh   := math.max(maxHigh, high)
+        newStop    = maxHigh - atrMult * atr
+        stopLevel := na(stopLevel) ? newStop : math.max(stopLevel, newStop)
 
-// 4) décision à la clôture
-if bar_index >= trendLen - 1
-    if not inPos and buyCond
-        pendingBuy   := true
-        newBuySignal := true
-    else if inPos and sellCond
-        pendingSell   := true
-        newSellSignal := true
+    // 4) décision à la clôture
+    if bar_index >= trendLen - 1
+        if not inPos and buyCond
+            pendingBuy   := true
+            newBuySignal := true
+        else if inPos and sellCond
+            pendingSell   := true
+            newSellSignal := true
 
-plot(e20,  "EMA20",  color = color.new(color.blue, 0))
-plot(e50,  "EMA50",  color = color.new(color.orange, 0))
-plot(e200, "EMA200", color = color.new(color.gray, 0), linewidth = 2)
-plot(showStop and inPos ? stopLevel : na, "Stop de protection", color = color.new(color.red, 0), style = plot.style_linebr)
-bgcolor(inPos ? color.new(color.green, 92) : na, title = "Gardien en BTC")
+plot(isDaily ? e20 : na,  "EMA20",  color = color.new(color.blue, 0))
+plot(isDaily ? e50 : na,  "EMA50",  color = color.new(color.orange, 0))
+plot(isDaily ? e200 : na, "EMA200", color = color.new(color.gray, 0), linewidth = 2)
+plot(isDaily and showStop and inPos ? stopLevel : na, "Stop de protection", color = color.new(color.red, 0), style = plot.style_linebr)
+bgcolor(isDaily and inPos ? color.new(color.green, 92) : na, title = "Gardien en BTC")
 
-alertcondition(newBuySignal,  "ORION : signal d'ACHAT",  "ORION gardien : signal d'ACHAT à la clôture (le bot achète à l'ouverture)")
-alertcondition(newSellSignal, "ORION : signal de VENTE", "ORION gardien : signal de VENTE à la clôture (le bot vend à l'ouverture)")
+alertcondition(isDaily and newBuySignal,  "ORION : signal d'ACHAT",  "ORION gardien : signal d'ACHAT à la clôture (le bot achète à l'ouverture)")
+alertcondition(isDaily and newSellSignal, "ORION : signal de VENTE", "ORION gardien : signal de VENTE à la clôture (le bot vend à l'ouverture)")
 
 var table panel = table.new(position.top_right, 2, 4, bgcolor = color.new(color.black, 20), border_width = 1)
-if barstate.islast
+if barstate.islast and not isDaily
+    table.cell(panel, 0, 0, "⚠ ORION", text_color = color.yellow)
+    table.cell(panel, 1, 0, "Passez en 1 jour (bouton du haut : D)", text_color = color.yellow)
+    for r = 1 to 3
+        table.cell(panel, 0, r, "")
+        table.cell(panel, 1, r, "")
+if barstate.islast and isDaily
     table.cell(panel, 0, 0, "ORION gardien", text_color = color.white)
     table.cell(panel, 1, 0, inPos or pendingBuy ? "ACHETEUR (BTC)" : "EN EUROS", text_color = inPos or pendingBuy ? color.lime : color.yellow)
     table.cell(panel, 0, 1, "EMA20 > EMA50", text_color = color.white)
