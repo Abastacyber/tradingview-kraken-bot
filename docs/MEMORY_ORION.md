@@ -61,6 +61,7 @@ Deux circuits distincts :
 | `RESTORE_ON_START` sur Render | false (l'état n'est pas relu au redémarrage) |
 | `render.yaml` du dépôt | ne reflète PAS les réglages réels de Render (fichier non utilisé) |
 | Secrets (clés Kraken + WEBHOOK_SECRET) | exposés le 11/11 → **renouvelés le 11/11** (nouvelle clé « API NEXT GEN » sans droit de retrait, ancienne supprimée ; /health OK) |
+| **Secrets — 25/11** | export `.env` partagé une 3e fois → **clé Kraken + WEBHOOK_SECRET à renouveler AVANT l'ordre-test réel** ; ne plus jamais exporter le `.env` (capture avec valeurs masquées) |
 | **Secrets — 20/11** | export `.env` de Render partagé dans la conversation → **clés renouvelées le 20/11** par le propriétaire : nouvelle clé Kraken « THE LAST ONE STANDING » (l'ancienne « API NEXT GEN » doit être supprimée) |
 | `FEE_BUFFER_PCT` sur Render | 0,0015 (0,15 %), vérifié le 20/11 ; aucun `GARDIEN_*` réglé sur Render |
 | Frais Kraken | **confirmés le 20/11** : palier 1 = 0,40 % maker / 0,80 % taker |
@@ -125,6 +126,9 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (2)** — Dépôt ≈ 21,56 € sur Kraken et `GARDIEN_ORDRE_TEST_AUTORISE=true` réglé. **Mais l'export `.env` de Render a de nouveau été partagé**
+  (clé « THE LAST ONE STANDING » avec droits d'ordres + WEBHOOK_SECRET) → **ordre-test réel SUSPENDU** jusqu'au renouvellement de la clé Kraken et du mot de passe.
+  Constat : WEBHOOK_SECRET contient toujours le TEXTE de la commande PowerShell (la commande n'a jamais été exécutée). Fichiers supprimés du conteneur de Claude.
 - **25/11/2026** — Nouveau WEBHOOK_SECRET réglé par le propriétaire. **Ordre-test en VALIDATION : OK** (12:10 UTC) : Kraken accepte l'achat limit
   (0,00027808 BTC à 53 512,7 € ≈ 14,88 € + frais ≤ 15 €), le stop-loss et la vente, sans exécution. Note : la validation Kraken n'a pas contrôlé les fonds
   (0,09 € sur le compte) → les fonds seront vérifiés par l'ordre-test réel. Prochaine étape : dépôt ≈ 20 € + GARDIEN_ORDRE_TEST_AUTORISE=true (GO).
