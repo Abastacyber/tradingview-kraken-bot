@@ -127,6 +127,10 @@ branche `feature/orion-protocol-v1`, environnement `tradingview-kraken-bot` → 
 
 ## 6. Journal des mises à jour
 
+- **25/11/2026 (7)** — Anciens scripts TradingView relus : « Scalp Suiveur — KR Scalping v3.1 » (BTC/EUR, 15 min, EMA9/21+RSI+BB, webhooks vers Render)
+  = obsolète (perdant net de frais, EXP01 ; webhooks ignorés depuis le 20/11) et contient un ANCIEN mot de passe webhook en clair (plus valable sur Render) ;
+  « AFYH GOLD » (XAUUSD, eToro levier 20, signaux manuels) = projet séparé. Le document « TV_Render_Phemex_BusinessPlan » est en fait un ancien app.py.
+  TradingView refuse d'ajouter un indicateur (limite du forfait probable) → remplacer le Scalp Suiveur par « ORION Gardien v1 ». Copies supprimées du conteneur.
 - **25/11/2026 (6)** — Pine Script « ORION Gardien v1 » écrit (`tradingview/orion_gardien_v1.pine`) : affichage des EMA, achats/ventes/stop et alertes
   de notification (aucun ordre, aucun webhook). Non compilé côté Claude (pas de compilateur Pine) : à vérifier par le propriétaire dans TradingView.
 - **25/11/2026 (5)** — **GO du propriétaire : gardien RÉEL activé** (16:24 UTC). /health : mode RÉEL, réconciliation OK, ordres autorisés.
